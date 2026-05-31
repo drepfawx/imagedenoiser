@@ -2109,7 +2109,8 @@ body.theme-light .tooltip-trigger {
   width: 220px;
   font-size: 11px;
   line-height: 1.45;
-  text-transform: none; /* Disable uppercase from th styling */
+  text-transform: none;
+  /* Disable uppercase from th styling */
   letter-spacing: normal;
   font-weight: 500;
   z-index: 999;
@@ -2134,7 +2135,7 @@ body.theme-light .tooltip-trigger {
   transform: translate(-50%, 0);
 }
 
-/* Ensure tooltips are not clipped by results table container */
+/* ensure tooltips are not clipped by results table container */
 .results-panel {
   overflow: visible !important;
 }
@@ -2143,10 +2144,61 @@ body.theme-light .tooltip-trigger {
   overflow: visible !important;
 }
 
-/* If viewport is narrow, fallback to auto scroll without cutting tooltip vertically */
+/* if viewport is narrow, fallback to auto scroll without cutting tooltip vertically */
 @media (max-width: 768px) {
   .tooltip-content {
     width: 170px;
     font-size: 10px;
   }
+}
+
+.row-caching-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  animation: caching-pulse 1.5s infinite ease-in-out;
+}
+
+body.theme-light .row-caching-badge {
+  background: rgba(37, 99, 235, 0.04);
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.15);
+}
+
+@keyframes caching-pulse {
+
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.row-queued-badge {
+  font-size: 9px;
+  font-weight: 550;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+body.theme-light .row-queued-badge {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--text-muted);
+  border-color: var(--border-color);
 }

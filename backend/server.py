@@ -96,7 +96,7 @@ BRISQUE.scale_features = patched_scale_features
 brisque_scorer = BRISQUE()
 
 def run_filter_with_metrics(input_img, filter_fn):
-    "Apply a filter, measure runtime, edge preservation, sharpness (laplacian var), BRISQUE, and NIQE."
+    """Apply a filter, measure runtime, edge preservation, sharpness (laplacian var), BRISQUE, and NIQE."""
     start = time.perf_counter()
     cleaned = filter_fn(input_img)
     runtime_ms = (time.perf_counter() - start) * 1000
@@ -124,12 +124,19 @@ def run_filter_with_metrics(input_img, filter_fn):
         print(f"NIQE calculation failed: {e}")
         niqe_score = 0.0
 
+    # 5. Utility Score (balances Edge Preservation, Quality/BRISQUE, and Execution Speed)
+    Q = max(0.0, min(1.0, (100.0 - brisque_score) / 100.0))
+    S = 1.0 / (1.0 + runtime_ms / 250.0)
+    E = edge_preservation
+    utility_score = round(float(0.4 * E + 0.3 * Q + 0.3 * S), 4)
+
     return cleaned, {
         "runtime_ms": round(runtime_ms, 1),
         "edge_preservation": edge_preservation,
         "laplacian_var": round(laplacian_var, 1),
         "brisque": brisque_score,
         "niqe": niqe_score,
+        "utility_score": utility_score,
     }
 
 # all available filters
@@ -180,23 +187,39 @@ async def process_image(file: UploadFile = File(...)):
             algorithm_used = "no significant noise detected"
             best_filter_id = None
 
-        # run ALL filters and collect real metrics
+        # run ONLY the recommended filter initially
         filter_metrics = []
         filter_outputs = {}
 
+        if best_filter_id and best_filter_id in FILTER_REGISTRY:
+            finfo = FILTER_REGISTRY[best_filter_id]
+            cleaned_img, metrics = run_filter_with_metrics(input_img, finfo["fn"])
+            filter_outputs[best_filter_id] = cleaned_img
+        else:
+            cleaned_img = input_img.copy()
+            metrics = None
+
+        # Build initial filter metrics list (placeholders for other filters)
         for fid, finfo in FILTER_REGISTRY.items():
-            cleaned, metrics = run_filter_with_metrics(input_img, finfo["fn"])
-            filter_outputs[fid] = cleaned
-            filter_metrics.append({
-                "id": fid,
-                "name": finfo["name"],
-                **metrics,
-            })
+            if fid == best_filter_id and metrics is not None:
+                filter_metrics.append({
+                    "id": fid,
+                    "name": finfo["name"],
+                    **metrics,
+                })
+            else:
+                filter_metrics.append({
+                    "id": fid,
+                    "name": finfo["name"],
+                    "runtime_ms": None,
+                    "edge_preservation": None,
+                    "laplacian_var": None,
+                    "brisque": None,
+                    "niqe": None,
+                    "utility_score": None
+                })
 
-        # use the auto-selected filter's output as the main cleaned image
-        cleaned_img = filter_outputs.get(best_filter_id, input_img.copy())
-
-        # saving cleaned image to disk currently (will prob remove it later)
+        # saving cleaned image to disk
         output_dir = "saved_results"
         os.makedirs(output_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -211,11 +234,15 @@ async def process_image(file: UploadFile = File(...)):
                 "estimated_sigma": round(final_sigma, 2),
                 "histogram_spike": round(final_spike, 2),
                 "detected_noise": system_decision.upper(),
-                "selected_algorithm": algorithm_used
+                "selected_algorithm": algorithm_used,
+                "best_filter_id": best_filter_id
             },
             "images": {
                 "noisy": mat_to_base64(input_img),
-                "cleaned": mat_to_base64(cleaned_img)
+                "cleaned": mat_to_base64(cleaned_img),
+                "all_cleaned": {
+                    best_filter_id: mat_to_base64(cleaned_img)
+                } if best_filter_id else {}
             },
             "filter_metrics": filter_metrics
         }
@@ -229,7 +256,7 @@ async def apply_filter(
     file: UploadFile = File(...),
     filter: str = Query(..., description="Filter to apply: gaussian, median, bilateral, nlm, cnn")
 ):
-    """Apply a specific denoising filter without re-running noise analysis."""
+    """Apply a specific denoising filter, compute metrics on-the-fly, and return them."""
     try:
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
@@ -239,38 +266,20 @@ async def apply_filter(
             return JSONResponse(status_code=400, content={"error": "Invalid image format."})
 
         filter_name = filter.lower().strip()
+        if filter_name not in FILTER_REGISTRY:
+            return JSONResponse(status_code=400, content={"error": f"Unknown filter: {filter_name}"})
 
-        if filter_name == "gaussian":
-            cleaned_img = cv2.GaussianBlur(input_img, (5, 5), 0)
-            algorithm_used = "Gaussian Filter (OpenCV GaussianBlur)"
-        elif filter_name == "median":
-            cleaned_img = cv2.medianBlur(input_img, 5)
-            algorithm_used = "Median filter (OpenCV MedianBlur)"
-        elif filter_name == "bilateral":
-            cleaned_img = cv2.bilateralFilter(input_img, 9, 75, 75)
-            algorithm_used = "Bilateral Filter (OpenCV bilateralFilter)"
-        elif filter_name == "nlm":
-            cleaned_img = cv2.fastNlMeansDenoisingColored(input_img, None, 10, 10, 7, 21)
-            algorithm_used = "Non-Local Means (OpenCV fastNlMeansDenoisingColored)"
-        elif filter_name == "cnn":
-            img_input = input_img.astype(np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_input).permute(2, 0, 1).unsqueeze(0)
-            model.eval()
-            with torch.no_grad():
-                output_tensor = model(img_tensor)
-            cleaned_img = output_tensor.squeeze(0).permute(1, 2, 0).numpy() * 255.0
-            cleaned_img = np.clip(cleaned_img, 0, 255).astype(np.uint8)
-            algorithm_used = "custom-trained CNN model"
-        else:
-            return JSONResponse(status_code=400, content={"error": f"Unknown filter: {filter_name}. Use: gaussian, median, bilateral, nlm, cnn"})
+        finfo = FILTER_REGISTRY[filter_name]
+        cleaned_img, metrics = run_filter_with_metrics(input_img, finfo["fn"])
 
         return {
             "status": "success",
             "filter_applied": filter_name,
-            "algorithm": algorithm_used,
+            "algorithm": finfo["name"],
             "images": {
                 "cleaned": mat_to_base64(cleaned_img)
-            }
+            },
+            "metrics": metrics
         }
     except Exception as e:
         import traceback

@@ -185,7 +185,28 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [histogramData, setHistogramData] = useState(null);
   const [activeFilterId, setActiveFilterId] = useState(null);
+  const activeFilterIdRef = useRef(activeFilterId);
+  useEffect(() => {
+    activeFilterIdRef.current = activeFilterId;
+  }, [activeFilterId]);
+
   const [filterLoading, setFilterLoading] = useState(false);
+  const [backgroundLoadingIds, setBackgroundLoadingIds] = useState([]);
+  
+  const [backgroundQueue, setBackgroundQueueState] = useState([]);
+  const backgroundQueueRef = useRef([]);
+  const setBackgroundQueue = (queue) => {
+    backgroundQueueRef.current = queue;
+    setBackgroundQueueState(queue);
+  };
+  const backgroundFetchSessionRef = useRef(null);
+  const activeFetchesRef = useRef({});
+  const filterAbortControllerRef = useRef(null);
+  const resultRef = useRef(result);
+
+  useEffect(() => {
+    resultRef.current = result;
+  }, [result]);
 
   const splitMarkerPosition = Math.max(1, Math.min(99, Number(sliderPos)));
 
@@ -294,6 +315,11 @@ function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    backgroundFetchSessionRef.current = null; // abort any running background fetches
+    filterAbortControllerRef.current?.abort(); // abort active request
+    setBackgroundLoadingIds([]);
+    setBackgroundQueue([]);
+
     if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
     }
@@ -327,8 +353,145 @@ function App() {
     }
   };
 
+  const applyCachedFilter = async (filterId, base64) => {
+    try {
+      const cleanedBlob = await (await fetch(`data:image/png;base64,${base64}`)).blob();
+      const newCleanedUrl = URL.createObjectURL(cleanedBlob);
+
+      // revoke old cleaned and mask URLs
+      if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl);
+      if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl);
+
+      // rebuild residual mask if noise was detected
+      let newMaskUrl = '';
+      if (hasDetectedNoise && noisyBlobUrl) {
+        try {
+          const maskBase64 = await buildResidualMask(noisyBlobUrl, newCleanedUrl);
+          const maskBlob = await (await fetch(maskBase64)).blob();
+          newMaskUrl = URL.createObjectURL(maskBlob);
+        } catch (maskError) {
+          console.error("Mask rebuild failed:", maskError);
+        }
+      }
+
+      setCleanedBlobUrl(newCleanedUrl);
+      setResidualMaskBlobUrl(newMaskUrl);
+      setActiveFilterId(filterId);
+
+      // recompute histogram
+      if (noisyBlobUrl && newCleanedUrl) {
+        Promise.all([
+          computeHistogram(noisyBlobUrl),
+          computeHistogram(newCleanedUrl),
+        ]).then(([noisyHist, cleanedHist]) => {
+          if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
+        }).catch(() => { });
+      }
+    } catch (e) {
+      console.error("Apply cached filter failed:", e);
+    }
+  };
+
+  const runBackgroundQueue = async (sessionToken, uncomputedFilterIds, file) => {
+    setBackgroundQueue(uncomputedFilterIds);
+
+    while (backgroundQueueRef.current.length > 0) {
+      if (backgroundFetchSessionRef.current !== sessionToken) return;
+
+      const filterId = backgroundQueueRef.current[0];
+
+      // Check if it was already cached/fetched
+      if (resultRef.current?.images?.all_cleaned?.[filterId]) {
+        setBackgroundQueue(backgroundQueueRef.current.filter((id) => id !== filterId));
+        continue;
+      }
+
+      const controller = new AbortController();
+      filterAbortControllerRef.current = controller;
+
+      const fetchPromise = (async () => {
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+
+          const response = await fetch(`${FILTER_API_URL}?filter=${encodeURIComponent(filterId)}`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (backgroundFetchSessionRef.current !== sessionToken) return null;
+
+          setResult((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              images: {
+                ...prev.images,
+                all_cleaned: {
+                  ...prev.images.all_cleaned,
+                  [filterId]: data.images.cleaned,
+                },
+              },
+              filter_metrics: prev.filter_metrics.map((metric) => {
+                if (metric.id === filterId) {
+                  return {
+                    ...metric,
+                    ...data.metrics,
+                  };
+                }
+                return metric;
+              }),
+            };
+          });
+
+          if (activeFilterIdRef.current === filterId) {
+            await applyCachedFilter(filterId, data.images.cleaned);
+            setFilterLoading(false);
+          }
+
+          return data.images.cleaned;
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            console.log(`Background fetch aborted for ${filterId}`);
+            // No-op: handleFilterSwitch prepended the aborted filter to the queue right after the clicked filter
+          } else {
+            console.error("Background fetch failed for", filterId, err);
+          }
+          return null;
+        } finally {
+          delete activeFetchesRef.current[filterId];
+          setBackgroundLoadingIds((prev) => prev.filter((id) => id !== filterId));
+          if (filterAbortControllerRef.current === controller) {
+            filterAbortControllerRef.current = null;
+          }
+        }
+      })();
+
+      activeFetchesRef.current[filterId] = fetchPromise;
+      setBackgroundLoadingIds((prev) => [...prev, filterId]);
+      setBackgroundQueue(backgroundQueueRef.current.filter((id) => id !== filterId));
+
+      try {
+        await fetchPromise;
+      } catch (err) {
+        // Abort error handled inside fetchPromise
+      }
+    }
+  };
+
   const handleProcessImage = async () => {
     if (!selectedFile || isCurrentFileAlreadyAnalyzed) return;
+
+    backgroundFetchSessionRef.current = null; // abort any running background fetches for the previous image
+    filterAbortControllerRef.current?.abort(); // abort active request
+    setBackgroundLoadingIds([]);
+    setBackgroundQueue([]);
 
     const wrapperHeight = comparisonWrapperRef.current?.getBoundingClientRect()?.height;
     if (wrapperHeight && Number.isFinite(wrapperHeight)) {
@@ -387,10 +550,7 @@ function App() {
       setLastAnalyzedFileKey(selectedFileKey);
 
       // determine which filter was auto-selected
-      const algo = data?.analysis?.selected_algorithm || '';
-      if (algo.includes('CNN')) setActiveFilterId('cnn');
-      else if (algo.includes('Median')) setActiveFilterId('median');
-      else setActiveFilterId(null);
+      setActiveFilterId(data?.analysis?.best_filter_id || null);
 
       // compute pixel intensity histograms for noisy vs cleaned
       if (noisyUrl && cleanedUrl) {
@@ -401,6 +561,18 @@ function App() {
           if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
         }).catch(() => { });
       }
+
+      // start background pre-fetching for other uncomputed filters
+      const sessionToken = Math.random().toString(36).substring(7);
+      backgroundFetchSessionRef.current = sessionToken;
+
+      const uncomputedFilters = (data?.filter_metrics || [])
+        .filter((f) => f.id !== data?.analysis?.best_filter_id && f.id !== null)
+        .map((f) => f.id);
+
+      if (uncomputedFilters.length > 0) {
+        runBackgroundQueue(sessionToken, uncomputedFilters, selectedFile);
+      }
     } catch (processingError) {
       setError(processingError?.message || 'Processing failed');
     } finally {
@@ -410,62 +582,45 @@ function App() {
 
   // switch to a different denoising filter on the already-analyzed image
   const handleFilterSwitch = async (filterId) => {
-    if (!selectedFile || !result || filterId === activeFilterId || filterLoading || loading) return;
+    if (!selectedFile || !result || filterId === activeFilterId || loading) return;
 
+    // 1. check if the filtered image is cached on the client
+    const cachedBase64 = result?.images?.all_cleaned?.[filterId];
+    if (cachedBase64) {
+      clearViewerModes();
+      await applyCachedFilter(filterId, cachedBase64);
+      return;
+    }
+
+    // 2. check if it's currently fetching in the background
+    const existingFetchPromise = activeFetchesRef.current[filterId];
+    if (existingFetchPromise) {
+      setFilterLoading(true);
+      clearViewerModes();
+      setActiveFilterId(filterId);
+      return;
+    }
+
+    // 3. Not cached and not currently fetching -> make it priority and start it
     setFilterLoading(true);
     clearViewerModes();
+    setActiveFilterId(filterId);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+    // Find currently active fetching filter, if any
+    const activeLoadingId = backgroundLoadingIds[0] || Object.keys(activeFetchesRef.current)[0];
 
-      const response = await fetch(`${FILTER_API_URL}?filter=${encodeURIComponent(filterId)}`, {
-        method: 'POST',
-        body: formData,
-      });
+    // Put it at the front of the background queue, followed immediately by the interrupted one (if any)
+    let nextQueue = backgroundQueueRef.current.filter((id) => id !== filterId);
+    if (activeLoadingId && activeLoadingId !== filterId) {
+      nextQueue = nextQueue.filter((id) => id !== activeLoadingId);
+      setBackgroundQueue([filterId, activeLoadingId, ...nextQueue]);
+    } else {
+      setBackgroundQueue([filterId, ...nextQueue]);
+    }
 
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data?.images?.cleaned) {
-        // revoke old cleaned and mask URLs
-        if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl);
-        if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl);
-
-        const cleanedBlob = await (await fetch(`data:image/png;base64,${data.images.cleaned}`)).blob();
-        const newCleanedUrl = URL.createObjectURL(cleanedBlob);
-
-        // rebuild residual mask if noise was detected
-        let newMaskUrl = '';
-        if (hasDetectedNoise && noisyBlobUrl) {
-          try {
-            const maskBase64 = await buildResidualMask(noisyBlobUrl, newCleanedUrl);
-            const maskBlob = await (await fetch(maskBase64)).blob();
-            newMaskUrl = URL.createObjectURL(maskBlob);
-          } catch { /* mask is optional */ }
-        }
-
-        setCleanedBlobUrl(newCleanedUrl);
-        setResidualMaskBlobUrl(newMaskUrl);
-        setActiveFilterId(filterId);
-
-        // recompute histogram
-        if (noisyBlobUrl && newCleanedUrl) {
-          Promise.all([
-            computeHistogram(noisyBlobUrl),
-            computeHistogram(newCleanedUrl),
-          ]).then(([noisyHist, cleanedHist]) => {
-            if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
-          }).catch(() => { });
-        }
-      }
-    } catch (switchError) {
-      setError(switchError?.message || 'Filter switch failed');
-    } finally {
-      setFilterLoading(false);
+    // Abort whatever is currently fetching so this priority one starts immediately
+    if (filterAbortControllerRef.current) {
+      filterAbortControllerRef.current.abort();
     }
   };
 
@@ -791,13 +946,18 @@ function App() {
                       </svg>
                       <div>
                         <h4>Selected Restoration Filter</h4>
-                        <strong>{result.analysis.selected_algorithm.charAt(0).toUpperCase() + result.analysis.selected_algorithm.slice(1)}</strong>
+                        <strong>
+                          {result.filter_metrics?.find(m => m.id === activeFilterId)?.name || 'Passthrough'}
+                        </strong>
                       </div>
                     </div>
                     <p className="analysis-algorithm-desc">
-                      {result.analysis.selected_algorithm.includes('CNN') && 'Deep Neural Network with residual learning layers trained to estimate and subtract Gaussian noise fields without blurring textures.'}
-                      {result.analysis.selected_algorithm.includes('Median') && 'Non-linear 2D filtering that replaces each pixel with the median of neighboring values, perfectly neutralizing impulse noise.'}
-                      {result.analysis.selected_algorithm.includes('no significant') && 'Passthrough mode. No active filters applied as image variance is within optimal limits.'}
+                      {activeFilterId === 'cnn' && 'Deep Neural Network with residual learning layers trained to estimate and subtract Gaussian noise fields without blurring textures.'}
+                      {activeFilterId === 'median' && 'Non-linear 2D filtering that replaces each pixel with the median of neighboring values, perfectly neutralizing impulse noise.'}
+                      {activeFilterId === 'gaussian' && 'Linear 2D filter that uses a Gaussian kernel to smooth high-frequency details, effective for mild Gaussian noise.'}
+                      {activeFilterId === 'bilateral' && 'Edge-preserving smoothing filter that weights pixels by spatial proximity and radiometric similarity, reducing noise while keeping sharp edges.'}
+                      {activeFilterId === 'nlm' && 'Non-Local Means filtering that averages pixels based on the similarity of their neighborhoods, highly effective but computationally expensive.'}
+                      {!activeFilterId && 'Passthrough mode. No active filters applied as image variance is within optimal limits.'}
                     </p>
                   </div>
 
@@ -1081,9 +1241,7 @@ function App() {
                           <h5>Denoising Core</h5>
                           <span>
                             {result
-                              ? result.analysis.detected_noise === 'GAUSSIAN' ? 'PyTorch CNN'
-                                : result.analysis.detected_noise === 'SALT_AND_PEPPER' ? 'OpenCV Median'
-                                  : 'Passthrough'
+                              ? (result.filter_metrics?.find(m => m.id === activeFilterId)?.name || 'Passthrough')
                               : 'CNN / NLM / Classic'}
                           </span>
                         </div>
@@ -1145,7 +1303,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(result.filter_metrics || []).map((filter) => {
+                        {(result?.filter_metrics || []).map((filter) => {
                           const isActive = filter.id === activeFilterId;
                           return (
                             <tr
@@ -1154,15 +1312,45 @@ function App() {
                               onClick={() => handleFilterSwitch(filter.id)}
                               title={isActive ? 'Currently active filter' : `Apply ${filter.name}`}
                             >
-                              <td style={{ fontWeight: isActive ? '600' : 'normal' }}>{filter.name}</td>
-                              <td className="metric-value-mono">{filter.runtime_ms} ms</td>
-                              <td className="metric-value-mono">{(filter.edge_preservation ?? 0).toFixed(4)}</td>
-                              <td className="metric-value-mono">{(filter.laplacian_var ?? 0).toFixed(1)}</td>
-                              <td className="metric-value-mono">{(filter.brisque ?? 0).toFixed(2)}</td>
-                              <td className="metric-value-mono">{(filter.niqe ?? 0).toFixed(2)}</td>
+                              <td style={{ fontWeight: isActive ? '600' : 'normal' }}>
+                                {filter.name}
+                              </td>
+                              <td className="metric-value-mono">
+                                {filter.runtime_ms !== null && filter.runtime_ms !== undefined
+                                  ? `${filter.runtime_ms} ms`
+                                  : '—'}
+                              </td>
+                              <td className="metric-value-mono">
+                                {filter.edge_preservation !== null && filter.edge_preservation !== undefined
+                                  ? filter.edge_preservation.toFixed(4)
+                                  : '—'}
+                              </td>
+                              <td className="metric-value-mono">
+                                {filter.laplacian_var !== null && filter.laplacian_var !== undefined
+                                  ? filter.laplacian_var.toFixed(1)
+                                  : '—'}
+                              </td>
+                              <td className="metric-value-mono">
+                                {filter.brisque !== null && filter.brisque !== undefined
+                                  ? filter.brisque.toFixed(2)
+                                  : '—'}
+                              </td>
+                              <td className="metric-value-mono">
+                                {filter.niqe !== null && filter.niqe !== undefined
+                                  ? filter.niqe.toFixed(2)
+                                  : '—'}
+                              </td>
                               <td>
                                 {isActive ? (
-                                  <span className="row-selected-badge">Active</span>
+                                  result?.images?.all_cleaned?.[filter.id] ? (
+                                    <span className="row-selected-badge">Active</span>
+                                  ) : (
+                                    <span className="row-caching-badge">Caching...</span>
+                                  )
+                                ) : backgroundLoadingIds.includes(filter.id) ? (
+                                  <span className="row-caching-badge">Caching...</span>
+                                ) : backgroundQueue.includes(filter.id) ? (
+                                  <span className="row-queued-badge">Queued</span>
                                 ) : (
                                   <span className="row-apply-badge">Apply</span>
                                 )}
