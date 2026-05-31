@@ -1,0 +1,29 @@
+# Frontend UI dependencies and build outputs
+frontend-ui/node_modules/
+frontend-ui/dist/
+frontend-ui/dist-ssr/
+frontend-ui/*.local
+
+# Python backend cache and runtime files
+backend/__pycache__/
+backend/saved_results/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.pytest_cache/
+backend/.venv/
+backend/env/
+backend/venv/
+backend/ENV/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+*.log
+
+# Large local datasets and raw image assets in backend
+backend/dataset/
+backend/alt_database/
+backend/*.jpg
+backend/*.png
+backend/*.rar
