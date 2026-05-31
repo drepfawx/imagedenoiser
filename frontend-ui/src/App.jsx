@@ -89,75 +89,6 @@ function loadImage(src) {
   });
 }
 
-// visual residual mask highlighting differences between noisy and cleaned images
-async function buildResidualMask(noisySrc, cleanedSrc) {
-  const [noisyImage, cleanedImage] = await Promise.all([loadImage(noisySrc), loadImage(cleanedSrc)]);
-  const width = noisyImage.naturalWidth || noisyImage.width;
-  const height = noisyImage.naturalHeight || noisyImage.height;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) {
-    throw new Error('Canvas context unavailable');
-  }
-
-  context.drawImage(noisyImage, 0, 0, width, height);
-  const noisyPixels = context.getImageData(0, 0, width, height);
-
-  context.clearRect(0, 0, width, height);
-  context.drawImage(cleanedImage, 0, 0, width, height);
-  const cleanedPixels = context.getImageData(0, 0, width, height);
-
-  const output = context.createImageData(width, height);
-  const noisyData = noisyPixels.data;
-  const cleanedData = cleanedPixels.data;
-  const outputData = output.data;
-
-  for (let index = 0; index < noisyData.length; index += 4) {
-    const redDelta = Math.abs(noisyData[index] - cleanedData[index]);
-    const greenDelta = Math.abs(noisyData[index + 1] - cleanedData[index + 1]);
-    const blueDelta = Math.abs(noisyData[index + 2] - cleanedData[index + 2]);
-    const intensity = Math.max(redDelta, greenDelta, blueDelta);
-
-    outputData[index] = 255;
-    outputData[index + 1] = 64 + Math.min(191, intensity * 1.5);
-    outputData[index + 2] = 0;
-    outputData[index + 3] = Math.min(255, 80 + intensity * 1.5);
-  }
-
-  context.putImageData(output, 0, 0);
-  return canvas.toDataURL('image/png');
-}
-
-// compute per-channel luminance histogram (48 bins, normalised 0-1)
-async function computeHistogram(src, bins = 48) {
-  const img = await loadImage(src);
-  const w = img.naturalWidth || img.width;
-  const h = img.naturalHeight || img.height;
-  const canvas = document.createElement('canvas');
-  // sample at most 400px wide to keep it fast on large images
-  const scale = Math.min(1, 400 / Math.max(w, 1));
-  canvas.width = Math.round(w * scale);
-  canvas.height = Math.round(h * scale);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  const counts = new Array(bins).fill(0);
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-    const bin = Math.min(bins - 1, Math.floor((lum * bins) / 256));
-    counts[bin]++;
-  }
-  const max = Math.max(...counts, 1);
-  return counts.map(c => c / max);
-}
-
-
-
 const API_URL = 'http://127.0.0.1:8000/api/process';
 const FILTER_API_URL = 'http://127.0.0.1:8000/api/apply-filter';
 
@@ -192,7 +123,7 @@ function App() {
 
   const [filterLoading, setFilterLoading] = useState(false);
   const [backgroundLoadingIds, setBackgroundLoadingIds] = useState([]);
-  
+
   const [backgroundQueue, setBackgroundQueueState] = useState([]);
   const backgroundQueueRef = useRef([]);
   const setBackgroundQueue = (queue) => {
@@ -353,7 +284,7 @@ function App() {
     }
   };
 
-  const applyCachedFilter = async (filterId, base64) => {
+  const applyCachedFilter = async (filterId, base64, maskBase64, cleanedHist) => {
     try {
       const cleanedBlob = await (await fetch(`data:image/png;base64,${base64}`)).blob();
       const newCleanedUrl = URL.createObjectURL(cleanedBlob);
@@ -362,30 +293,27 @@ function App() {
       if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl);
       if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl);
 
-      // rebuild residual mask if noise was detected
       let newMaskUrl = '';
-      if (hasDetectedNoise && noisyBlobUrl) {
+      if (maskBase64) {
         try {
-          const maskBase64 = await buildResidualMask(noisyBlobUrl, newCleanedUrl);
-          const maskBlob = await (await fetch(maskBase64)).blob();
+          const maskBlob = await (await fetch(`data:image/png;base64,${maskBase64}`)).blob();
           newMaskUrl = URL.createObjectURL(maskBlob);
         } catch (maskError) {
-          console.error("Mask rebuild failed:", maskError);
+          console.error("Mask apply failed:", maskError);
         }
       }
 
       setCleanedBlobUrl(newCleanedUrl);
       setResidualMaskBlobUrl(newMaskUrl);
       setActiveFilterId(filterId);
+      setFilterLoading(false);
 
-      // recompute histogram
-      if (noisyBlobUrl && newCleanedUrl) {
-        Promise.all([
-          computeHistogram(noisyBlobUrl),
-          computeHistogram(newCleanedUrl),
-        ]).then(([noisyHist, cleanedHist]) => {
-          if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
-        }).catch(() => { });
+      // Set precomputed histogram data directly
+      if (resultRef.current?.images?.noisy_hist && cleanedHist) {
+        setHistogramData({
+          noisy: resultRef.current.images.noisy_hist,
+          cleaned: cleanedHist,
+        });
       }
     } catch (e) {
       console.error("Apply cached filter failed:", e);
@@ -400,7 +328,7 @@ function App() {
 
       const filterId = backgroundQueueRef.current[0];
 
-      // Check if it was already cached/fetched
+      // check if it was already cached/fetched
       if (resultRef.current?.images?.all_cleaned?.[filterId]) {
         setBackgroundQueue(backgroundQueueRef.current.filter((id) => id !== filterId));
         continue;
@@ -437,6 +365,14 @@ function App() {
                   ...prev.images.all_cleaned,
                   [filterId]: data.images.cleaned,
                 },
+                all_histograms: {
+                  ...prev.images.all_histograms,
+                  [filterId]: data.images.cleaned_hist,
+                },
+                all_masks: {
+                  ...prev.images.all_masks,
+                  [filterId]: data.images.residual_mask,
+                },
               },
               filter_metrics: prev.filter_metrics.map((metric) => {
                 if (metric.id === filterId) {
@@ -451,7 +387,7 @@ function App() {
           });
 
           if (activeFilterIdRef.current === filterId) {
-            await applyCachedFilter(filterId, data.images.cleaned);
+            await applyCachedFilter(filterId, data.images.cleaned, data.images.residual_mask, data.images.cleaned_hist);
             setFilterLoading(false);
           }
 
@@ -536,9 +472,8 @@ function App() {
         cleanedUrl = URL.createObjectURL(cleanedBlob);
 
         const detectedNoise = data?.analysis?.detected_noise && data.analysis.detected_noise !== 'NONE';
-        if (detectedNoise) {
-          const maskBase64 = await buildResidualMask(noisyUrl, cleanedUrl);
-          const maskBlob = await (await fetch(maskBase64)).blob();
+        if (detectedNoise && data?.images?.residual_mask) {
+          const maskBlob = await (await fetch(`data:image/png;base64,${data.images.residual_mask}`)).blob();
           maskUrl = URL.createObjectURL(maskBlob);
         }
       }
@@ -552,26 +487,27 @@ function App() {
       // determine which filter was auto-selected
       setActiveFilterId(data?.analysis?.best_filter_id || null);
 
-      // compute pixel intensity histograms for noisy vs cleaned
-      if (noisyUrl && cleanedUrl) {
-        Promise.all([
-          computeHistogram(noisyUrl),
-          computeHistogram(cleanedUrl),
-        ]).then(([noisyHist, cleanedHist]) => {
-          if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
-        }).catch(() => { });
+      // set pixel intensity histograms directly from precomputed data
+      if (data?.images?.noisy_hist && data?.images?.cleaned_hist) {
+        setHistogramData({
+          noisy: data.images.noisy_hist,
+          cleaned: data.images.cleaned_hist,
+        });
       }
 
-      // start background pre-fetching for other uncomputed filters
-      const sessionToken = Math.random().toString(36).substring(7);
-      backgroundFetchSessionRef.current = sessionToken;
+      // start background pre-fetching for other uncomputed filters if noise is detected
+      const isCleanSignal = data?.analysis?.detected_noise === 'NONE';
+      if (!isCleanSignal) {
+        const sessionToken = Math.random().toString(36).substring(7);
+        backgroundFetchSessionRef.current = sessionToken;
 
-      const uncomputedFilters = (data?.filter_metrics || [])
-        .filter((f) => f.id !== data?.analysis?.best_filter_id && f.id !== null)
-        .map((f) => f.id);
+        const uncomputedFilters = (data?.filter_metrics || [])
+          .filter((f) => f.id !== data?.analysis?.best_filter_id && f.id !== null)
+          .map((f) => f.id);
 
-      if (uncomputedFilters.length > 0) {
-        runBackgroundQueue(sessionToken, uncomputedFilters, selectedFile);
+        if (uncomputedFilters.length > 0) {
+          runBackgroundQueue(sessionToken, uncomputedFilters, selectedFile);
+        }
       }
     } catch (processingError) {
       setError(processingError?.message || 'Processing failed');
@@ -582,13 +518,21 @@ function App() {
 
   // switch to a different denoising filter on the already-analyzed image
   const handleFilterSwitch = async (filterId) => {
-    if (!selectedFile || !result || filterId === activeFilterId || loading) return;
+    if (!selectedFile || !result || loading) return;
+
+    if (filterId === activeFilterId) {
+      clearViewerModes();
+      setActiveFilterId(null);
+      return;
+    }
 
     // 1. check if the filtered image is cached on the client
     const cachedBase64 = result?.images?.all_cleaned?.[filterId];
     if (cachedBase64) {
+      const cachedMask = result?.images?.all_masks?.[filterId];
+      const cachedHist = result?.images?.all_histograms?.[filterId];
       clearViewerModes();
-      await applyCachedFilter(filterId, cachedBase64);
+      await applyCachedFilter(filterId, cachedBase64, cachedMask, cachedHist);
       return;
     }
 
@@ -601,27 +545,33 @@ function App() {
       return;
     }
 
-    // 3. Not cached and not currently fetching -> make it priority and start it
+    // 3. not cached and not currently fetching -> make it priority and start it
     setFilterLoading(true);
     clearViewerModes();
     setActiveFilterId(filterId);
 
-    // Find currently active fetching filter, if any
+    // find currently active fetching filter, if any
     const activeLoadingId = backgroundLoadingIds[0] || Object.keys(activeFetchesRef.current)[0];
 
-    // Put it at the front of the background queue, followed immediately by the interrupted one (if any)
+    // put it at the front of the background queue, followed immediately by the interrupted one (if any)
     let nextQueue = backgroundQueueRef.current.filter((id) => id !== filterId);
     if (activeLoadingId && activeLoadingId !== filterId) {
       nextQueue = nextQueue.filter((id) => id !== activeLoadingId);
-      setBackgroundQueue([filterId, activeLoadingId, ...nextQueue]);
+      nextQueue = [filterId, activeLoadingId, ...nextQueue];
     } else {
-      setBackgroundQueue([filterId, ...nextQueue]);
+      nextQueue = [filterId, ...nextQueue];
     }
 
-    // Abort whatever is currently fetching so this priority one starts immediately
+    // generate a new session token to either restart the running queue with new priority or start a new queue session if the loop wasn't running.
+    const sessionToken = Math.random().toString(36).substring(7);
+    backgroundFetchSessionRef.current = sessionToken;
+
+    // abort whatever is currently fetching so this priority one starts immediately
     if (filterAbortControllerRef.current) {
       filterAbortControllerRef.current.abort();
     }
+
+    runBackgroundQueue(sessionToken, nextQueue, selectedFile);
   };
 
   // magnifier toggle
@@ -764,9 +714,12 @@ function App() {
   const magnifierSource = result
     ? showDifference && residualMaskBlobUrl
       ? residualMaskBlobUrl
-      : cleanedImage
+      : activeFilterId
+        ? cleanedImage
+        : noisyImage
     : previewUrl;
   const showMagnifierDock = isMagnifierVisible && (result ? (showDifference ? Boolean(residualMaskBlobUrl) : true) : Boolean(previewUrl));
+  const isDifferenceUsable = Boolean(result && activeFilterId && residualMaskBlobUrl);
 
   return (
     <div className={`theme-wrapper ${isLightMode ? 'light-mode' : ''}`}>
@@ -1032,7 +985,7 @@ function App() {
                           <button type="button" className={`viewer-control-btn ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading || filterLoading}>
                             <MagnifierIcon />
                           </button>
-                          <button type="button" className={`viewer-control-btn ${showDifference ? 'active' : ''}`} onClick={() => hasDetectedNoise && handleDifferenceToggle()} disabled={!hasDetectedNoise || loading || filterLoading || isMagnifierEnabled} aria-label="Toggle isolated noise view" title={hasDetectedNoise ? 'Isolated noise view' : 'No significant noise detected'}>
+                          <button type="button" className={`viewer-control-btn ${showDifference ? 'active' : ''}`} onClick={() => isDifferenceUsable && handleDifferenceToggle()} disabled={!isDifferenceUsable || loading || filterLoading || isMagnifierEnabled} aria-label="Toggle isolated noise view" title={isDifferenceUsable ? 'Isolated noise view' : (!activeFilterId ? 'Apply a filter to isolate differences' : 'No difference data available')}>
                             <NoiseIcon active={showDifference} />
                           </button>
                         </div>
@@ -1044,7 +997,7 @@ function App() {
                         >
                           {showMagnifierDock && (
                             <div className="viewer-magnifier-preview">
-                              {(!result || !hasDetectedNoise || showDifference) ? (
+                              {(!result || !activeFilterId || showDifference) ? (
                                 <div
                                   className="viewer-magnifier-zoomed-bg"
                                   style={{
@@ -1069,7 +1022,7 @@ function App() {
                                   </div>
                                 </div>
                               )}
-                              {result && hasDetectedNoise && !showDifference && (
+                              {result && activeFilterId && !showDifference && (
                                 <div className="viewer-magnifier-split-line" aria-hidden="true" />
                               )}
                             </div>
@@ -1108,15 +1061,29 @@ function App() {
                       </div>
                     )}
 
+                    {result && filterLoading && (
+                      <div className="image-stage" onMouseMove={handleViewerPointerMove}>
+                        <img
+                          key={noisyImage}
+                          src={noisyImage}
+                          alt="Preview"
+                          className="viewer-image viewer-image--scanning single-image"
+                          draggable="false"
+                          onDragStart={(event) => event.preventDefault()}
+                        />
+                      </div>
+                    )}
+
                     {result && !loading && !filterLoading && showDifference && residualMaskBlobUrl && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
-                        <img key={residualMaskBlobUrl} src={residualMaskBlobUrl} alt="Residual mask" className="viewer-image residual-mask" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                        <img key={cleanedImage} src={cleanedImage} alt="Cleaned Base" className="viewer-image base-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                        <img key={residualMaskBlobUrl} src={residualMaskBlobUrl} alt="Residual mask" className="viewer-image residual-mask" style={{ zIndex: 4, pointerEvents: 'none' }} draggable="false" onDragStart={(event) => event.preventDefault()} />
                       </div>
                     )}
 
                     {result && !loading && !filterLoading && !showDifference && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
-                        {hasDetectedNoise && (
+                        {activeFilterId && (
                           <div
                             className={`split-marker ${isDraggingSplit ? 'is-dragging' : ''}`}
                             style={{ left: `${splitMarkerPosition}%` }}
@@ -1133,8 +1100,8 @@ function App() {
                           />
                         )}
 
-                        {!hasDetectedNoise ? (
-                          <img key={cleanedImage} src={cleanedImage} alt="Cleaned" className="viewer-image single-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                        {!activeFilterId ? (
+                          <img key={noisyImage} src={noisyImage} alt="Original" className="viewer-image single-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
                         ) : (
                           <>
                             <img key={noisyImage} src={noisyImage} alt="Before" className="viewer-image base-image" draggable="false" onDragStart={(event) => event.preventDefault()} />

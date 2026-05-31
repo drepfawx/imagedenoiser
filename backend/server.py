@@ -139,6 +139,31 @@ def run_filter_with_metrics(input_img, filter_fn):
         "utility_score": utility_score,
     }
 
+def compute_luminance_histogram(img, bins=48):
+    "Compute normalized 48-bin luminance histogram."
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hist, _ = np.histogram(gray, bins=bins, range=(0, 256))
+    max_val = float(np.max(hist))
+    if max_val == 0:
+        max_val = 1.0
+    return [float(x / max_val) for x in hist]
+
+def build_residual_mask(noisy, cleaned):
+    "Generate visual difference mask highlighting changes."
+    diff = cv2.absdiff(noisy, cleaned)
+    intensity = np.max(diff, axis=2).astype(np.float32)
+    
+    h, w = noisy.shape[:2]
+    # BGRA layout (OpenCV encodes BGR/BGRA natively)
+    mask = np.zeros((h, w, 4), dtype=np.uint8)
+    mask[..., 0] = 0 # Blue
+    mask[..., 1] = np.clip(intensity * 3.0, 0, 255).astype(np.uint8) # Green
+    mask[..., 2] = 255 # Red
+    mask[..., 3] = np.clip(intensity * 8.0, 0, 255).astype(np.uint8) # Alpha
+    
+    _, buffer = cv2.imencode('.png', mask)
+    return base64.b64encode(buffer).decode('utf-8')
+
 # all available filters
 FILTER_REGISTRY = {
     "gaussian":  {"name": "Gaussian Filter",       "fn": lambda img: cv2.GaussianBlur(img, (5, 5), 0)},
@@ -199,7 +224,7 @@ async def process_image(file: UploadFile = File(...)):
             cleaned_img = input_img.copy()
             metrics = None
 
-        # Build initial filter metrics list (placeholders for other filters)
+        # build initial filter metrics list (placeholders for other filters)
         for fid, finfo in FILTER_REGISTRY.items():
             if fid == best_filter_id and metrics is not None:
                 filter_metrics.append({
@@ -228,6 +253,25 @@ async def process_image(file: UploadFile = File(...)):
         cv2.imwrite(filepath, cleaned_img)
         print(f"Saved cleaned image: {filepath}")
 
+        # compute noisy and cleaned histograms
+        noisy_hist = compute_luminance_histogram(input_img)
+        cleaned_hist = compute_luminance_histogram(cleaned_img)
+        
+        # compute residual mask if noise was detected
+        detected_noise = system_decision.upper() != "NONE"
+        residual_mask = build_residual_mask(input_img, cleaned_img) if detected_noise else None
+
+        # build client cache dictionaries for the initially computed recommended filter
+        all_cleaned = {}
+        all_histograms = {}
+        all_masks = {}
+        if best_filter_id:
+            best_base64 = mat_to_base64(cleaned_img)
+            all_cleaned[best_filter_id] = best_base64
+            all_histograms[best_filter_id] = cleaned_hist
+            if detected_noise and residual_mask:
+                all_masks[best_filter_id] = residual_mask
+
         return {
             "status": "success",
             "analysis": {
@@ -240,9 +284,12 @@ async def process_image(file: UploadFile = File(...)):
             "images": {
                 "noisy": mat_to_base64(input_img),
                 "cleaned": mat_to_base64(cleaned_img),
-                "all_cleaned": {
-                    best_filter_id: mat_to_base64(cleaned_img)
-                } if best_filter_id else {}
+                "all_cleaned": all_cleaned,
+                "all_histograms": all_histograms,
+                "all_masks": all_masks,
+                "noisy_hist": noisy_hist,
+                "cleaned_hist": cleaned_hist,
+                "residual_mask": residual_mask
             },
             "filter_metrics": filter_metrics
         }
@@ -272,12 +319,17 @@ async def apply_filter(
         finfo = FILTER_REGISTRY[filter_name]
         cleaned_img, metrics = run_filter_with_metrics(input_img, finfo["fn"])
 
+        cleaned_hist = compute_luminance_histogram(cleaned_img)
+        residual_mask = build_residual_mask(input_img, cleaned_img)
+
         return {
             "status": "success",
             "filter_applied": filter_name,
             "algorithm": finfo["name"],
             "images": {
-                "cleaned": mat_to_base64(cleaned_img)
+                "cleaned": mat_to_base64(cleaned_img),
+                "cleaned_hist": cleaned_hist,
+                "residual_mask": residual_mask
             },
             "metrics": metrics
         }

@@ -776,6 +776,12 @@ body.theme-light::after {
   color: #93c5fd;
 }
 
+body.theme-light .viewer-control-btn.active {
+  border-color: rgba(37, 99, 235, 0.4);
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent-blue);
+}
+
 .viewer-control-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -978,6 +984,10 @@ body.theme-light::after {
 }
 
 /* residual mode */
+.comparison-wrapper.difference-mode {
+  background: #08111f !important;
+}
+
 .difference-mode .img-after {
   mix-blend-mode: difference;
   clip-path: none !important;
