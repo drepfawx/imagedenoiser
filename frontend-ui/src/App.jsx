@@ -132,6 +132,30 @@ async function buildResidualMask(noisySrc, cleanedSrc) {
   return canvas.toDataURL('image/png');
 }
 
+// compute per-channel luminance histogram (48 bins, normalised 0-1)
+async function computeHistogram(src, bins = 48) {
+  const img = await loadImage(src);
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const canvas = document.createElement('canvas');
+  // sample at most 400px wide to keep it fast on large images
+  const scale = Math.min(1, 400 / Math.max(w, 1));
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const counts = new Array(bins).fill(0);
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    const bin = Math.min(bins - 1, Math.floor((lum * bins) / 256));
+    counts[bin]++;
+  }
+  const max = Math.max(...counts, 1);
+  return counts.map(c => c / max);
+}
+
 
 const getComparativeMetrics = (noiseType, sigma, spike) => {
   const clampedSpike = Math.min(12.0, spike);
@@ -244,10 +268,12 @@ function App() {
   const [cleanedBlobUrl, setCleanedBlobUrl] = useState('');
   const [residualMaskBlobUrl, setResidualMaskBlobUrl] = useState('');
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
-  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [previewFadeActive, setPreviewFadeActive] = useState(false);
   const [frozenViewerHeight, setFrozenViewerHeight] = useState(null);
   const [lastAnalyzedFileKey, setLastAnalyzedFileKey] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [histogramData, setHistogramData] = useState(null);
+
   const splitMarkerPosition = Math.max(1, Math.min(99, Number(sliderPos)));
 
   const selectedFileKey = selectedFile
@@ -301,8 +327,6 @@ function App() {
   }, [noisyBlobUrl, cleanedBlobUrl, residualMaskBlobUrl]);
 
   const hasDetectedNoise = Boolean(result?.analysis?.detected_noise && result.analysis.detected_noise !== 'NONE');
-
-
   const clearViewerModes = () => {
     setShowDifference(false);
     setIsMagnifierEnabled(false);
@@ -310,6 +334,43 @@ function App() {
     setIsMagnifierClosing(false);
     setMagnifierZoom(4.5);
     baselineZoomRef.current = null;
+  };
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+
+    if (files && files.length > 0) {
+      const file = files[0];
+
+      if (file.type.startsWith('image/')) {
+        handleFileChange({ target: { files: [file] } });
+        setError('');
+      } else {
+        setError('Unsupported file format. Please drop an image file (e.g., JPG, PNG).');
+      }
+    }
   };
 
   const handleFileChange = async (event) => {
@@ -333,6 +394,7 @@ function App() {
     setNoisyBlobUrl('');
     setCleanedBlobUrl('');
     setResidualMaskBlobUrl('');
+    setHistogramData(null);
     setFrozenViewerHeight(null);
     clearViewerModes();
     setSliderPos(50);
@@ -405,6 +467,16 @@ function App() {
       setResidualMaskBlobUrl(maskUrl);
       setResult(data);
       setLastAnalyzedFileKey(selectedFileKey);
+
+      // compute pixel intensity histograms for noisy vs cleaned
+      if (noisyUrl && cleanedUrl) {
+        Promise.all([
+          computeHistogram(noisyUrl),
+          computeHistogram(cleanedUrl),
+        ]).then(([noisyHist, cleanedHist]) => {
+          if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
+        }).catch(() => { });
+      }
     } catch (processingError) {
       setError(processingError?.message || 'Processing failed');
     } finally {
@@ -593,18 +665,40 @@ function App() {
 
         <div className="top-row">
           <aside className="left-column">
-            <div className="panel">
+            <div className="panel input-panel">
               <div className="panel-header">Input</div>
-              <div className="upload-zone">
-                <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-                  {selectedFile ? selectedFile.name : 'Choose a file or click here'}
+              <div
+                className={`upload-zone ${isDragging ? 'is-dragging' : ''}`}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <p className="upload-file-name">
+                  {selectedFile ? selectedFile.name : 'Choose a file or drag and drop here'}
                 </p>
                 <input ref={fileRef} type="file" accept="image/*" onChange={handleFileChange} className="file-input" />
               </div>
-              <button onClick={handleProcessImage} disabled={loading || !selectedFile || isCurrentFileAlreadyAnalyzed} className="action-btn">
-                {loading ? 'Processing...' : isCurrentFileAlreadyAnalyzed ? 'Already analyzed' : 'Start Analysis'}
-              </button>
-              {error && <div style={{ color: 'var(--error-red)', marginTop: '10px', fontSize: '13px' }}>{error}</div>}
+
+              <div className={`action-container ${selectedFile || error ? 'is-active' : ''}`}>
+                <div className="action-wrapper">
+                  {selectedFile && (
+                    <button
+                      onClick={handleProcessImage}
+                      disabled={loading || isCurrentFileAlreadyAnalyzed}
+                      className="action-btn"
+                    >
+                      {loading ? 'Processing...' : isCurrentFileAlreadyAnalyzed ? 'Already analyzed' : 'Start Analysis'}
+                    </button>
+                  )}
+
+                  {error && (
+                    <div className="upload-error-msg">
+                      {error}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className={`panel analysis-panel ${result ? `analysis-panel--${result.analysis.detected_noise.toLowerCase()}` : ''}`}>
@@ -722,30 +816,55 @@ function App() {
                     </p>
                   </div>
 
-                  {/* collapsible console logs */}
-                  <div className="analysis-console-collapsible">
-                    <button
-                      type="button"
-                      className="console-toggle-btn"
-                      onClick={() => setIsConsoleOpen(!isConsoleOpen)}
-                    >
-                      <span>Developer Console Logs</span>
-                      <svg className={`chevron-icon ${isConsoleOpen ? 'open' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '16px', height: '16px' }}>
-                        <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-
-                    {isConsoleOpen && (
-                      <div className="terminal-panel" style={{ marginTop: '10px', minHeight: 'auto' }}>
-                        <div className="terminal-header">sys.stdout - analysis logs</div>
-                        <div className="terminal-line">[EXEC] Estimated sigma: {result.analysis.estimated_sigma}</div>
-                        <div className="terminal-line">[EXEC] Histogram spike: {result.analysis.histogram_spike}</div>
-                        <div className="terminal-line">[EXEC] Decision code: {result.analysis.detected_noise}</div>
-                        <div className="terminal-line">[EXEC] Selected algorithm: {result.analysis.selected_algorithm}</div>
-                        <div className="terminal-line">[STATUS] Process finished successfully (exit code 0).</div>
+                  {/* row 4: pixel intensity histogram */}
+                  {histogramData && (
+                    <div className="histogram-card">
+                      <div className="histogram-header">
+                        <span>Pixel Intensity</span>
+                        <div className="histogram-legend">
+                          <span className="legend-dot legend-dot--noisy" /><span>Noisy</span>
+                          <span className="legend-dot legend-dot--cleaned" /><span>Cleaned</span>
+                        </div>
                       </div>
-                    )}
-                  </div>
+                      <svg
+                        className="histogram-svg"
+                        viewBox={`0 0 ${histogramData.noisy.length * 5} 60`}
+                        preserveAspectRatio="none"
+                        aria-label="Pixel intensity histogram"
+                      >
+                        {/* noisy layer */}
+                        {histogramData.noisy.map((val, i) => (
+                          <rect
+                            key={`n${i}`}
+                            x={i * 5}
+                            y={60 - val * 58}
+                            width={4}
+                            height={val * 58}
+                            rx={1}
+                            fill="rgba(239,68,68,0.38)"
+                          />
+                        ))}
+                        {/* cleaned layer */}
+                        {histogramData.cleaned.map((val, i) => (
+                          <rect
+                            key={`c${i}`}
+                            x={i * 5}
+                            y={60 - val * 58}
+                            width={4}
+                            height={val * 58}
+                            rx={1}
+                            fill="rgba(52,211,153,0.55)"
+                          />
+                        ))}
+                      </svg>
+                      <div className="histogram-axis">
+                        <span>Shadows</span>
+                        <span>Midtones</span>
+                        <span>Highlights</span>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
             </div>
@@ -754,7 +873,9 @@ function App() {
           <div className="right-column">
             <section className="panel viewer-panel">
               <div className="panel-header">
-                Viewer {selectedFile && `- ${selectedFile.name}`}
+                <span className="truncate-text">
+                  Viewer {selectedFile && `- ${selectedFile.name}`}
+                </span>
               </div>
 
               <div className="viewer-shell" ref={viewerShellRef}>
