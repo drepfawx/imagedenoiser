@@ -567,7 +567,6 @@ body.theme-light::after {
   border-radius: 14px;
   /* allow control previews to escape without pushing layout */
   overflow: visible;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 24px 60px -32px rgba(15, 23, 42, 0.8);
 }
 
 .viewer-shell {
@@ -702,6 +701,46 @@ body.theme-light::after {
   overflow: hidden;
 }
 
+.viewer-empty-state {
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.viewer-empty-icon {
+  width: 52px;
+  height: 52px;
+  color: rgba(148, 163, 184, 0.72);
+  opacity: 0.9;
+}
+
+.viewer-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.viewer-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+  letter-spacing: 0.2px;
+}
+
+.viewer-empty-text {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 240px;
+}
+
 .image-stage::before {
   content: none;
 }
@@ -722,7 +761,17 @@ body.theme-light::after {
   max-height: 100%;
   object-fit: fill;
   transform-origin: center center;
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition: transform 0.3s ease, opacity 0.3s ease, filter 0.3s ease;
+}
+
+.viewer-image--fade-in {
+  animation: viewer-image-fade 260ms ease-out both;
+}
+
+.viewer-image--scanning {
+  opacity: 0.76;
+  filter: blur(1.4px) saturate(0.9) brightness(0.9);
+  transform: scale(1.01);
 }
 
 .viewer-image.base-image {
@@ -748,6 +797,18 @@ body.theme-light::after {
   width: 100%;
   height: 100%;
   object-fit: fill;
+}
+
+@keyframes viewer-image-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .viewer-magnifier-split-line {
@@ -1362,75 +1423,74 @@ body.theme-light .row-selected-badge {
   left: 0;
   width: 100%;
   height: 100%;
-  background: var(--scanning-overlay-bg);
-  backdrop-filter: blur(4px);
+  background: transparent;
+  backdrop-filter: blur(2.5px);
+  -webkit-backdrop-filter: blur(2.5px);
   display: flex;
-  flex-direction: column;
   justify-content: center;
   align-items: center;
   z-index: 50;
   border-radius: inherit;
+  overflow: hidden;
+  animation: scanning-overlay-fade 300ms ease-out both;
+}
+
+@keyframes scanning-overlay-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .scanner-box {
-  width: 200px;
-  height: 200px;
-  border: 2px solid var(--scanner-box-border);
-  border-radius: 12px;
-  position: relative;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
   overflow: hidden;
-  margin-bottom: 20px;
-  box-shadow: inset 0 0 20px rgba(0, 162, 255, 0.1);
+  margin: 0;
+  box-shadow: none;
 }
 
 .scanner-line {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
-  height: 2px;
-  background-color: var(--accent-blue);
-  box-shadow: 0 0 15px 2px var(--accent-glow);
-  animation: scan-animation 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  height: 100%;
+  border-radius: inherit;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.26) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.26) 1px, transparent 1px);
+  background-size: 34px 34px;
+  background-position: 0 0;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1) 50%, rgba(0, 0, 0, 0.72) 72%, rgba(0, 0, 0, 0.24) 88%, transparent 100%);
+  -webkit-mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1) 50%, rgba(0, 0, 0, 0.72) 72%, rgba(0, 0, 0, 0.24) 88%, transparent 100%);
+  animation: grid-pulse 1.8s ease-in-out infinite;
 }
 
-@keyframes scan-animation {
+@keyframes grid-pulse {
   0% {
-    top: 0;
-    opacity: 0;
-  }
-
-  10% {
-    opacity: 1;
-  }
-
-  90% {
-    opacity: 1;
-  }
-
-  100% {
-    top: 100%;
-    opacity: 0;
-  }
-}
-
-.scanning-text {
-  color: var(--text-main);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 1px;
-  animation: pulse-text 1.5s infinite;
-}
-
-@keyframes pulse-text {
-
-  0%,
-  100% {
-    opacity: 1;
+    opacity: 0.34;
+    transform: scale(1);
+    filter: brightness(1);
   }
 
   50% {
-    opacity: 0.5;
+    opacity: 0.62;
+    transform: scale(1.01);
+    filter: brightness(1.14);
+  }
+
+  100% {
+    opacity: 0.34;
+    transform: scale(1);
+    filter: brightness(1);
   }
 }
 
@@ -1494,6 +1554,11 @@ body.theme-light .row-selected-badge {
 
 /* empty state */
 .analysis-empty-state {
+  gap: 14px;
+}
+
+.analysis-empty-state,
+.analysis-loading-state {
   text-align: center;
   padding: 20px 10px;
   display: flex;
@@ -1502,6 +1567,7 @@ body.theme-light .row-selected-badge {
   justify-content: center;
   gap: 14px;
   flex: 1;
+  min-height: 240px;
 }
 
 .analysis-empty-icon-wrapper {
@@ -1532,13 +1598,7 @@ body.theme-light .row-selected-badge {
 
 /* loading state */
 .analysis-loading-state {
-  text-align: center;
-  padding: 20px 10px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
+  gap: 14px;
 }
 
 .analysis-scanner-box {
@@ -1548,7 +1608,7 @@ body.theme-light .row-selected-badge {
   border-radius: 10px;
   position: relative;
   overflow: hidden;
-  margin-bottom: 20px;
+  margin-bottom: 0;
   border: 1px solid var(--border-color);
 }
 
@@ -1576,15 +1636,23 @@ body.theme-light .row-selected-badge {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-header);
-  margin-bottom: 8px;
+  margin: 0;
+}
+
+.analysis-empty-state h3 {
+  margin: 0;
 }
 
 .analysis-loading-state p {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
-  margin-bottom: 15px;
-  max-width: 285px;
+  margin: 0;
+  max-width: 260px;
+}
+
+.analysis-empty-state p {
+  margin: 0;
 }
 
 /* dashboard layout */
@@ -1827,4 +1895,13 @@ body.theme-light .analysis-algorithm-header svg {
 
 body.theme-light .analysis-metric-card {
   background: rgba(0, 0, 0, 0.02);
+}
+
+body.theme-light .comparison-wrapper {
+  background: linear-gradient(180deg, #edf2f7, #e2e8f0);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08), 0 20px 48px -28px rgba(15, 23, 42, 0.25);
+}
+
+body.theme-dark .comparison-wrapper {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.45), rgba(15, 23, 42, 0.45));
 }

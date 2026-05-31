@@ -69,6 +69,17 @@ function PulseHeartbeatIcon() {
   );
 }
 
+function MonitorDisplayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="viewer-empty-icon">
+      <rect x="4.5" y="5.5" width="15" height="10" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M9 19h6M12 15.5v3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 10.2h1.8M14.2 10.2H16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M10.1 12.6h3.8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -234,12 +245,21 @@ function App() {
   const [residualMaskBlobUrl, setResidualMaskBlobUrl] = useState('');
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const [previewFadeActive, setPreviewFadeActive] = useState(false);
+  const [frozenViewerHeight, setFrozenViewerHeight] = useState(null);
+  const [lastAnalyzedFileKey, setLastAnalyzedFileKey] = useState('');
   const splitMarkerPosition = Math.max(1, Math.min(99, Number(sliderPos)));
+
+  const selectedFileKey = selectedFile
+    ? `${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}`
+    : '';
+  const isCurrentFileAlreadyAnalyzed = Boolean(selectedFileKey) && selectedFileKey === lastAnalyzedFileKey;
 
   const fileRef = useRef(null);
   const bodyOverflowRef = useRef('');
   const baselineZoomRef = useRef(null);
   const viewerShellRef = useRef(null);
+  const comparisonWrapperRef = useRef(null);
 
   useEffect(() => {
     document.body.classList.toggle('theme-light', isLightMode);
@@ -302,7 +322,9 @@ function App() {
 
     const objectUrl = URL.createObjectURL(file);
     setSelectedFile(file);
+    setLastAnalyzedFileKey('');
     setPreviewUrl(objectUrl);
+    setPreviewFadeActive(true);
     setResult(null);
     setError('');
     if (noisyBlobUrl) URL.revokeObjectURL(noisyBlobUrl);
@@ -311,6 +333,7 @@ function App() {
     setNoisyBlobUrl('');
     setCleanedBlobUrl('');
     setResidualMaskBlobUrl('');
+    setFrozenViewerHeight(null);
     clearViewerModes();
     setSliderPos(50);
 
@@ -325,7 +348,12 @@ function App() {
   };
 
   const handleProcessImage = async () => {
-    if (!selectedFile) return;
+    if (!selectedFile || isCurrentFileAlreadyAnalyzed) return;
+
+    const wrapperHeight = comparisonWrapperRef.current?.getBoundingClientRect()?.height;
+    if (wrapperHeight && Number.isFinite(wrapperHeight)) {
+      setFrozenViewerHeight(Math.round(wrapperHeight));
+    }
 
     setLoading(true);
     setError('');
@@ -376,6 +404,7 @@ function App() {
       setCleanedBlobUrl(cleanedUrl);
       setResidualMaskBlobUrl(maskUrl);
       setResult(data);
+      setLastAnalyzedFileKey(selectedFileKey);
     } catch (processingError) {
       setError(processingError?.message || 'Processing failed');
     } finally {
@@ -572,8 +601,8 @@ function App() {
                 </p>
                 <input ref={fileRef} type="file" accept="image/*" onChange={handleFileChange} className="file-input" />
               </div>
-              <button onClick={handleProcessImage} disabled={loading || !selectedFile} className="action-btn">
-                {loading ? 'Processing...' : 'Start analysis'}
+              <button onClick={handleProcessImage} disabled={loading || !selectedFile || isCurrentFileAlreadyAnalyzed} className="action-btn">
+                {loading ? 'Processing...' : isCurrentFileAlreadyAnalyzed ? 'Already analyzed' : 'Start Analysis'}
               </button>
               {error && <div style={{ color: 'var(--error-red)', marginTop: '10px', fontSize: '13px' }}>{error}</div>}
             </div>
@@ -596,7 +625,7 @@ function App() {
                     <PulseHeartbeatIcon />
                   </div>
                   <h3>Analyzer Engine Idle</h3>
-                  <p>Choose an image and click <strong>Start analysis</strong> to execute the noise profiling tensor model.</p>
+                  <p>Choose an image and click <strong>Start Analysis</strong> to execute the noise profiling tensor model.</p>
                 </div>
               )}
 
@@ -607,12 +636,6 @@ function App() {
                   </div>
                   <h3>Scanning Image Pixels</h3>
                   <p>Running CNN estimations, calculating standard deviation of Laplacian variance, and detecting frequency spikes...</p>
-
-                  <div className="terminal-panel" style={{ marginTop: '15px', minHeight: '80px' }}>
-                    <div className="terminal-line" style={{ color: 'var(--accent-blue)' }}>[SYSTEM] Spawning python process uvicorn...</div>
-                    <div className="terminal-line" style={{ color: 'var(--accent-blue)' }}>[TENSORS] Allocating convolution kernels...</div>
-                    <div className="terminal-line" style={{ color: 'var(--terminal-green)' }}>[RUNNING] Executing feature extractor...</div>
-                  </div>
                 </div>
               )}
 
@@ -736,7 +759,7 @@ function App() {
 
               <div className="viewer-shell" ref={viewerShellRef}>
                 <div className="viewer-main">
-                  <div className={`comparison-wrapper ${showDifference ? 'difference-mode' : ''}`} onDragStart={(event) => event.preventDefault()} style={{ '--aspect-ratio': String(viewerAspectRatio), aspectRatio: 'var(--aspect-ratio)', minHeight: previewUrl ? '0' : undefined, '--magnifier-zoom': magnifierZoom, '--split-pos': splitMarkerPosition }}>
+                  <div className={`comparison-wrapper ${showDifference ? 'difference-mode' : ''}`} ref={comparisonWrapperRef} onDragStart={(event) => event.preventDefault()} style={{ '--aspect-ratio': String(viewerAspectRatio), aspectRatio: 'var(--aspect-ratio)', minHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : (previewUrl ? '0' : undefined), height: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, maxHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, '--magnifier-zoom': magnifierZoom, '--split-pos': splitMarkerPosition }}>
                     {result && !loading && (
                       <div className={`viewer-controls ${isMagnifierEnabled ? 'viewer-controls--has-preview' : ''}`}>
                         <div className="viewer-controls-row">
@@ -792,21 +815,36 @@ function App() {
                     {loading && (
                       <div className="scanning-overlay">
                         <div className="scanner-box"><div className="scanner-line"></div></div>
-                        <p className="scanning-text">Loading image...</p>
                       </div>
                     )}
 
-                    {!previewUrl && !loading && <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Choose an image to begin.</div>}
+                    {!previewUrl && !loading && (
+                      <div className="viewer-empty-state">
+                        <MonitorDisplayIcon />
+                        <div className="viewer-empty-copy">
+                          <p className="viewer-empty-title">Viewer ready.</p>
+                          <p className="viewer-empty-text">Use the upload bar to load an image.</p>
+                        </div>
+                      </div>
+                    )}
 
-                    {previewUrl && !result && !loading && (
+                    {previewUrl && !result && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
-                        <img src={previewUrl} alt="Preview" className="viewer-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                        <img
+                          key={previewUrl}
+                          src={previewUrl}
+                          alt="Preview"
+                          className={`viewer-image${previewFadeActive ? ' viewer-image--fade-in' : ''}${loading ? ' viewer-image--scanning' : ''}`}
+                          draggable="false"
+                          onDragStart={(event) => event.preventDefault()}
+                          onAnimationEnd={() => setPreviewFadeActive(false)}
+                        />
                       </div>
                     )}
 
                     {result && !loading && showDifference && residualMaskBlobUrl && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
-                        <img src={residualMaskBlobUrl} alt="Residual mask" className="viewer-image residual-mask" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                        <img key={residualMaskBlobUrl} src={residualMaskBlobUrl} alt="Residual mask" className="viewer-image residual-mask" draggable="false" onDragStart={(event) => event.preventDefault()} />
                       </div>
                     )}
 
@@ -830,11 +868,11 @@ function App() {
                         )}
 
                         {!hasDetectedNoise ? (
-                          <img src={cleanedImage} alt="Cleaned" className="viewer-image single-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                          <img key={cleanedImage} src={cleanedImage} alt="Cleaned" className="viewer-image single-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
                         ) : (
                           <>
-                            <img src={noisyImage} alt="Before" className="viewer-image base-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
-                            <img src={cleanedImage} alt="After" className="viewer-image img-after" style={{ clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)` }} draggable="false" onDragStart={(event) => event.preventDefault()} />
+                            <img key={noisyImage} src={noisyImage} alt="Before" className="viewer-image base-image" draggable="false" onDragStart={(event) => event.preventDefault()} />
+                            <img key={cleanedImage} src={cleanedImage} alt="After" className="viewer-image img-after" style={{ clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)` }} draggable="false" onDragStart={(event) => event.preventDefault()} />
                           </>
                         )}
                       </div>
