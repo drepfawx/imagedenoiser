@@ -123,6 +123,9 @@ async function buildResidualMask(noisySrc, cleanedSrc) {
 
 
 const getComparativeMetrics = (noiseType, sigma, spike) => {
+  const clampedSpike = Math.min(12.0, spike);
+  const clampedSigma = Math.min(60.0, sigma);
+
   const list = [
     { id: 'gaussian', name: 'Gaussian Filter', psnr: '2.10', ssim: '0.810', runtime: '12', selected: false, reason: 'Standard' },
     { id: 'median', name: 'Median Filter', psnr: '1.85', ssim: '0.780', runtime: '8', selected: false, reason: 'Impulse Only' },
@@ -136,62 +139,62 @@ const getComparativeMetrics = (noiseType, sigma, spike) => {
   }
 
   if (noiseType === 'GAUSSIAN') {
-    list[4].psnr = (1.8 + (sigma * 0.14) + (Math.sin(sigma) * 0.1)).toFixed(2);
-    list[4].ssim = (0.88 + (35 - sigma) * 0.003).toFixed(3);
-    list[4].runtime = Math.round(110 + (sigma * 0.5));
+    list[4].psnr = (1.8 + (clampedSigma * 0.14) + (Math.sin(clampedSigma) * 0.1)).toFixed(2);
+    list[4].ssim = Math.min(0.999, 0.88 + (35 - clampedSigma) * 0.003).toFixed(3);
+    list[4].runtime = Math.round(110 + (clampedSigma * 0.5));
     list[4].selected = true;
     list[4].reason = 'Selected (Optimal)';
 
-    list[3].psnr = (1.5 + (sigma * 0.11) + (Math.cos(sigma) * 0.1)).toFixed(2);
-    list[3].ssim = (0.84 + (35 - sigma) * 0.004).toFixed(3);
-    list[3].runtime = Math.round(750 + (sigma * 2.5));
+    list[3].psnr = (1.5 + (clampedSigma * 0.11) + (Math.cos(clampedSigma) * 0.1)).toFixed(2);
+    list[3].ssim = Math.min(0.999, 0.84 + (35 - clampedSigma) * 0.004).toFixed(3);
+    list[3].runtime = Math.round(750 + (clampedSigma * 2.5));
     list[3].selected = false;
     list[3].reason = 'Very Slow';
 
-    list[2].psnr = (1.0 + (sigma * 0.08)).toFixed(2);
-    list[2].ssim = (0.80 + (35 - sigma) * 0.003).toFixed(3);
-    list[2].runtime = Math.round(35 + (sigma * 0.2));
+    list[2].psnr = (1.0 + (clampedSigma * 0.08)).toFixed(2);
+    list[2].ssim = Math.min(0.999, 0.80 + (35 - clampedSigma) * 0.003).toFixed(3);
+    list[2].runtime = Math.round(35 + (clampedSigma * 0.2));
     list[2].selected = false;
     list[2].reason = 'Preserves Edges';
 
-    list[0].psnr = (0.8 + (sigma * 0.06)).toFixed(2);
-    list[0].ssim = (0.75 + (35 - sigma) * 0.002).toFixed(3);
+    list[0].psnr = (0.8 + (clampedSigma * 0.06)).toFixed(2);
+    list[0].ssim = Math.min(0.999, 0.75 + (35 - clampedSigma) * 0.002).toFixed(3);
     list[0].runtime = 10;
     list[0].selected = false;
     list[0].reason = 'Blurs Details';
 
-    list[1].psnr = (0.2 + (sigma * 0.02)).toFixed(2);
-    list[1].ssim = (0.60 + (35 - sigma) * 0.002).toFixed(3);
+    list[1].psnr = (0.2 + (clampedSigma * 0.02)).toFixed(2);
+    list[1].ssim = Math.min(0.999, 0.60 + (35 - clampedSigma) * 0.002).toFixed(3);
     list[1].runtime = 8;
     list[1].selected = false;
     list[1].reason = 'Unsuited';
 
   } else if (noiseType === 'SALT_AND_PEPPER') {
-    list[1].psnr = (7.5 + (spike * 0.2)).toFixed(2);
-    list[1].ssim = (0.94 + (spike * 0.002)).toFixed(3);
-    list[1].runtime = Math.round(7 + (spike * 0.1));
+    list[1].psnr = (7.5 + (clampedSpike * 0.2)).toFixed(2);
+    list[1].ssim = Math.min(0.999, 0.94 + (clampedSpike * 0.002)).toFixed(3);
+    list[1].runtime = Math.round(7 + (clampedSpike * 0.1));
     list[1].selected = true;
     list[1].reason = 'Selected (Optimal)';
 
-    list[4].psnr = (3.8 + (spike * 0.1)).toFixed(2);
+    list[4].psnr = (3.8 + (clampedSpike * 0.1)).toFixed(2);
     list[4].ssim = (0.85).toFixed(3);
     list[4].runtime = 112;
     list[4].selected = false;
     list[4].reason = 'Suboptimal';
 
-    list[3].psnr = (1.8 + (spike * 0.05)).toFixed(2);
+    list[3].psnr = (1.8 + (clampedSpike * 0.05)).toFixed(2);
     list[3].ssim = (0.72).toFixed(3);
     list[3].runtime = 740;
     list[3].selected = false;
     list[3].reason = 'Inefficient';
 
-    list[2].psnr = (1.2 + (spike * 0.02)).toFixed(2);
+    list[2].psnr = (1.2 + (clampedSpike * 0.02)).toFixed(2);
     list[2].ssim = (0.68).toFixed(3);
     list[2].runtime = 36;
     list[2].selected = false;
     list[2].reason = 'Smeared Pixels';
 
-    list[0].psnr = (0.4 + (spike * 0.01)).toFixed(2);
+    list[0].psnr = (0.4 + (clampedSpike * 0.01)).toFixed(2);
     list[0].ssim = (0.52).toFixed(3);
     list[0].runtime = 9;
     list[0].selected = false;
@@ -642,7 +645,7 @@ function App() {
                     <div className="analysis-metric-card">
                       <div className="analysis-metric-header">
                         <span>Noise Level (Sigma)</span>
-                        <strong>{result.analysis.estimated_sigma}</strong>
+                        <strong>{result.analysis.estimated_sigma.toFixed(2)}</strong>
                       </div>
                       <div className="gauge-track">
                         <div
@@ -660,7 +663,7 @@ function App() {
                     <div className="analysis-metric-card">
                       <div className="analysis-metric-header">
                         <span>Spike Ratio (Impulse)</span>
-                        <strong>{result.analysis.histogram_spike}</strong>
+                        <strong>{result.analysis.histogram_spike > 20 ? '> 20.00' : result.analysis.histogram_spike.toFixed(2)}</strong>
                       </div>
                       <div className="gauge-track">
                         <div

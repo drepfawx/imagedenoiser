@@ -1027,13 +1027,22 @@ body.theme-light .pipeline-node.node-active .node-icon-circle {
   background: rgba(59, 130, 246, 0.04);
 }
 
+.results-panel {
+  display: flex;
+  flex-direction: column;
+}
+
 .results-table-wrapper {
   overflow-x: auto;
   margin-top: 10px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .results-table {
   width: 100%;
+  height: 100%;
   border-collapse: collapse;
   text-align: left;
   font-size: 12px;
@@ -1041,8 +1050,25 @@ body.theme-light .pipeline-node.node-active .node-icon-circle {
 
 .results-table th,
 .results-table td {
-  padding: 8px 6px;
+  padding: 12px 6px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.results-table th:not(:last-child),
+.results-table td:not(:last-child) {
+  position: relative;
+}
+
+.results-table th:not(:last-child)::after,
+.results-table td:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 25%;
+  height: 50%;
+  width: 1px;
+  background: var(--border-color);
+  opacity: 0.75;
 }
 
 .results-table th {
@@ -1051,6 +1077,28 @@ body.theme-light .pipeline-node.node-active .node-icon-circle {
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.5px;
+}
+
+.results-table th:nth-child(1) { width: 32%; } /* Filter Method */
+.results-table th:nth-child(2) { width: 17%; } /* PSNR Improvement */
+.results-table th:nth-child(3) { width: 17%; } /* SSIM Retention */
+.results-table th:nth-child(4) { width: 17%; } /* Runtime */
+.results-table th:nth-child(5) { width: 17%; } /* Status */
+
+.results-table th:nth-child(1),
+.results-table td:nth-child(1) {
+  text-align: left;
+}
+
+.results-table th:nth-child(2),
+.results-table td:nth-child(2),
+.results-table th:nth-child(3),
+.results-table td:nth-child(3),
+.results-table th:nth-child(4),
+.results-table td:nth-child(4),
+.results-table th:nth-child(5),
+.results-table td:nth-child(5) {
+  text-align: center;
 }
 
 .results-table tr {
@@ -1087,6 +1135,7 @@ body.theme-light .results-table tr.row-selected {
   border: 1px solid rgba(59, 130, 246, 0.25);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 body.theme-light .row-selected-badge {
@@ -1105,12 +1154,14 @@ body.theme-light .row-selected-badge {
   border: 1px solid var(--border-color);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 .metric-value-mono {
   font-family: 'Fira Code', monospace;
   font-weight: 550;
   color: var(--text-main);
+  white-space: nowrap;
 }
 
 /* responsive (wip)*/
