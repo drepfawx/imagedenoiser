@@ -157,98 +157,9 @@ async function computeHistogram(src, bins = 48) {
 }
 
 
-const getComparativeMetrics = (noiseType, sigma, spike) => {
-  const clampedSpike = Math.min(12.0, spike);
-  const clampedSigma = Math.min(60.0, sigma);
-
-  const list = [
-    { id: 'gaussian', name: 'Gaussian Filter', psnr: '2.10', ssim: '0.810', runtime: '12', selected: false, reason: 'Standard' },
-    { id: 'median', name: 'Median Filter', psnr: '1.85', ssim: '0.780', runtime: '8', selected: false, reason: 'Impulse Only' },
-    { id: 'bilateral', name: 'Bilateral Filter', psnr: '2.90', ssim: '0.875', runtime: '40', selected: false, reason: 'Edge Aware' },
-    { id: 'nlm', name: 'Non-Local Means (NLM)', psnr: '3.85', ssim: '0.912', runtime: '820', selected: false, reason: 'High Quality' },
-    { id: 'cnn', name: 'PyTorch CNN Denoiser', psnr: '4.26', ssim: '0.954', runtime: '115', selected: false, reason: 'Optimal (G)' },
-  ];
-
-  if (noiseType === 'NONE_BASE') {
-    return list;
-  }
-
-  if (noiseType === 'GAUSSIAN') {
-    list[4].psnr = (1.8 + (clampedSigma * 0.14) + (Math.sin(clampedSigma) * 0.1)).toFixed(2);
-    list[4].ssim = Math.min(0.999, 0.88 + (35 - clampedSigma) * 0.003).toFixed(3);
-    list[4].runtime = Math.round(110 + (clampedSigma * 0.5));
-    list[4].selected = true;
-    list[4].reason = 'Selected (Optimal)';
-
-    list[3].psnr = (1.5 + (clampedSigma * 0.11) + (Math.cos(clampedSigma) * 0.1)).toFixed(2);
-    list[3].ssim = Math.min(0.999, 0.84 + (35 - clampedSigma) * 0.004).toFixed(3);
-    list[3].runtime = Math.round(750 + (clampedSigma * 2.5));
-    list[3].selected = false;
-    list[3].reason = 'Very Slow';
-
-    list[2].psnr = (1.0 + (clampedSigma * 0.08)).toFixed(2);
-    list[2].ssim = Math.min(0.999, 0.80 + (35 - clampedSigma) * 0.003).toFixed(3);
-    list[2].runtime = Math.round(35 + (clampedSigma * 0.2));
-    list[2].selected = false;
-    list[2].reason = 'Preserves Edges';
-
-    list[0].psnr = (0.8 + (clampedSigma * 0.06)).toFixed(2);
-    list[0].ssim = Math.min(0.999, 0.75 + (35 - clampedSigma) * 0.002).toFixed(3);
-    list[0].runtime = 10;
-    list[0].selected = false;
-    list[0].reason = 'Blurs Details';
-
-    list[1].psnr = (0.2 + (clampedSigma * 0.02)).toFixed(2);
-    list[1].ssim = Math.min(0.999, 0.60 + (35 - clampedSigma) * 0.002).toFixed(3);
-    list[1].runtime = 8;
-    list[1].selected = false;
-    list[1].reason = 'Unsuited';
-
-  } else if (noiseType === 'SALT_AND_PEPPER') {
-    list[1].psnr = (7.5 + (clampedSpike * 0.2)).toFixed(2);
-    list[1].ssim = Math.min(0.999, 0.94 + (clampedSpike * 0.002)).toFixed(3);
-    list[1].runtime = Math.round(7 + (clampedSpike * 0.1));
-    list[1].selected = true;
-    list[1].reason = 'Selected (Optimal)';
-
-    list[4].psnr = (3.8 + (clampedSpike * 0.1)).toFixed(2);
-    list[4].ssim = (0.85).toFixed(3);
-    list[4].runtime = 112;
-    list[4].selected = false;
-    list[4].reason = 'Suboptimal';
-
-    list[3].psnr = (1.8 + (clampedSpike * 0.05)).toFixed(2);
-    list[3].ssim = (0.72).toFixed(3);
-    list[3].runtime = 740;
-    list[3].selected = false;
-    list[3].reason = 'Inefficient';
-
-    list[2].psnr = (1.2 + (clampedSpike * 0.02)).toFixed(2);
-    list[2].ssim = (0.68).toFixed(3);
-    list[2].runtime = 36;
-    list[2].selected = false;
-    list[2].reason = 'Smeared Pixels';
-
-    list[0].psnr = (0.4 + (clampedSpike * 0.01)).toFixed(2);
-    list[0].ssim = (0.52).toFixed(3);
-    list[0].runtime = 9;
-    list[0].selected = false;
-    list[0].reason = 'Smeared Pixels';
-
-  } else {
-    list.forEach((item, idx) => {
-      list[idx].psnr = '0.00';
-      list[idx].ssim = '1.000';
-      list[idx].runtime = '0';
-      list[idx].selected = false;
-      list[idx].reason = 'Passthrough';
-    });
-  }
-
-  return list;
-};
 
 const API_URL = 'http://127.0.0.1:8000/api/process';
+const FILTER_API_URL = 'http://127.0.0.1:8000/api/apply-filter';
 
 function App() {
   const [isLightMode, setIsLightMode] = useState(false);
@@ -273,6 +184,8 @@ function App() {
   const [lastAnalyzedFileKey, setLastAnalyzedFileKey] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [histogramData, setHistogramData] = useState(null);
+  const [activeFilterId, setActiveFilterId] = useState(null);
+  const [filterLoading, setFilterLoading] = useState(false);
 
   const splitMarkerPosition = Math.max(1, Math.min(99, Number(sliderPos)));
 
@@ -319,12 +232,16 @@ function App() {
   }, [previewUrl]);
 
   useEffect(() => {
-    return () => {
-      if (noisyBlobUrl) URL.revokeObjectURL(noisyBlobUrl);
-      if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl);
-      if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl);
-    };
-  }, [noisyBlobUrl, cleanedBlobUrl, residualMaskBlobUrl]);
+    return () => { if (noisyBlobUrl) URL.revokeObjectURL(noisyBlobUrl); };
+  }, [noisyBlobUrl]);
+
+  useEffect(() => {
+    return () => { if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl); };
+  }, [cleanedBlobUrl]);
+
+  useEffect(() => {
+    return () => { if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl); };
+  }, [residualMaskBlobUrl]);
 
   const hasDetectedNoise = Boolean(result?.analysis?.detected_noise && result.analysis.detected_noise !== 'NONE');
   const clearViewerModes = () => {
@@ -395,6 +312,7 @@ function App() {
     setCleanedBlobUrl('');
     setResidualMaskBlobUrl('');
     setHistogramData(null);
+    setActiveFilterId(null);
     setFrozenViewerHeight(null);
     clearViewerModes();
     setSliderPos(50);
@@ -468,6 +386,12 @@ function App() {
       setResult(data);
       setLastAnalyzedFileKey(selectedFileKey);
 
+      // determine which filter was auto-selected
+      const algo = data?.analysis?.selected_algorithm || '';
+      if (algo.includes('CNN')) setActiveFilterId('cnn');
+      else if (algo.includes('Median')) setActiveFilterId('median');
+      else setActiveFilterId(null);
+
       // compute pixel intensity histograms for noisy vs cleaned
       if (noisyUrl && cleanedUrl) {
         Promise.all([
@@ -481,6 +405,67 @@ function App() {
       setError(processingError?.message || 'Processing failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // switch to a different denoising filter on the already-analyzed image
+  const handleFilterSwitch = async (filterId) => {
+    if (!selectedFile || !result || filterId === activeFilterId || filterLoading || loading) return;
+
+    setFilterLoading(true);
+    clearViewerModes();
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const response = await fetch(`${FILTER_API_URL}?filter=${encodeURIComponent(filterId)}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data?.images?.cleaned) {
+        // revoke old cleaned and mask URLs
+        if (cleanedBlobUrl) URL.revokeObjectURL(cleanedBlobUrl);
+        if (residualMaskBlobUrl) URL.revokeObjectURL(residualMaskBlobUrl);
+
+        const cleanedBlob = await (await fetch(`data:image/png;base64,${data.images.cleaned}`)).blob();
+        const newCleanedUrl = URL.createObjectURL(cleanedBlob);
+
+        // rebuild residual mask if noise was detected
+        let newMaskUrl = '';
+        if (hasDetectedNoise && noisyBlobUrl) {
+          try {
+            const maskBase64 = await buildResidualMask(noisyBlobUrl, newCleanedUrl);
+            const maskBlob = await (await fetch(maskBase64)).blob();
+            newMaskUrl = URL.createObjectURL(maskBlob);
+          } catch { /* mask is optional */ }
+        }
+
+        setCleanedBlobUrl(newCleanedUrl);
+        setResidualMaskBlobUrl(newMaskUrl);
+        setActiveFilterId(filterId);
+
+        // recompute histogram
+        if (noisyBlobUrl && newCleanedUrl) {
+          Promise.all([
+            computeHistogram(noisyBlobUrl),
+            computeHistogram(newCleanedUrl),
+          ]).then(([noisyHist, cleanedHist]) => {
+            if (noisyHist && cleanedHist) setHistogramData({ noisy: noisyHist, cleaned: cleanedHist });
+          }).catch(() => { });
+        }
+      }
+    } catch (switchError) {
+      setError(switchError?.message || 'Filter switch failed');
+    } finally {
+      setFilterLoading(false);
     }
   };
 
@@ -881,13 +866,13 @@ function App() {
               <div className="viewer-shell" ref={viewerShellRef}>
                 <div className="viewer-main">
                   <div className={`comparison-wrapper ${showDifference ? 'difference-mode' : ''}`} ref={comparisonWrapperRef} onDragStart={(event) => event.preventDefault()} style={{ '--aspect-ratio': String(viewerAspectRatio), aspectRatio: 'var(--aspect-ratio)', minHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : (previewUrl ? '0' : undefined), height: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, maxHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, '--magnifier-zoom': magnifierZoom, '--split-pos': splitMarkerPosition }}>
-                    {result && !loading && (
+                    {result && !loading && !filterLoading && (
                       <div className={`viewer-controls ${isMagnifierEnabled ? 'viewer-controls--has-preview' : ''}`}>
                         <div className="viewer-controls-row">
-                          <button type="button" className={`viewer-control-btn ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading}>
+                          <button type="button" className={`viewer-control-btn ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading || filterLoading}>
                             <MagnifierIcon />
                           </button>
-                          <button type="button" className={`viewer-control-btn ${showDifference ? 'active' : ''}`} onClick={() => hasDetectedNoise && handleDifferenceToggle()} disabled={!hasDetectedNoise || loading || isMagnifierEnabled} aria-label="Toggle isolated noise view" title={hasDetectedNoise ? 'Isolated noise view' : 'No significant noise detected'}>
+                          <button type="button" className={`viewer-control-btn ${showDifference ? 'active' : ''}`} onClick={() => hasDetectedNoise && handleDifferenceToggle()} disabled={!hasDetectedNoise || loading || filterLoading || isMagnifierEnabled} aria-label="Toggle isolated noise view" title={hasDetectedNoise ? 'Isolated noise view' : 'No significant noise detected'}>
                             <NoiseIcon active={showDifference} />
                           </button>
                         </div>
@@ -933,7 +918,7 @@ function App() {
                       </div>
                     )}
 
-                    {loading && (
+                    {(loading || filterLoading) && (
                       <div className="scanning-overlay">
                         <div className="scanner-box"><div className="scanner-line"></div></div>
                       </div>
@@ -955,7 +940,7 @@ function App() {
                           key={previewUrl}
                           src={previewUrl}
                           alt="Preview"
-                          className={`viewer-image${previewFadeActive ? ' viewer-image--fade-in' : ''}${loading ? ' viewer-image--scanning' : ''}`}
+                          className={`viewer-image${previewFadeActive ? ' viewer-image--fade-in' : ''}${(loading || filterLoading) ? ' viewer-image--scanning' : ''}`}
                           draggable="false"
                           onDragStart={(event) => event.preventDefault()}
                           onAnimationEnd={() => setPreviewFadeActive(false)}
@@ -963,13 +948,13 @@ function App() {
                       </div>
                     )}
 
-                    {result && !loading && showDifference && residualMaskBlobUrl && (
+                    {result && !loading && !filterLoading && showDifference && residualMaskBlobUrl && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
                         <img key={residualMaskBlobUrl} src={residualMaskBlobUrl} alt="Residual mask" className="viewer-image residual-mask" draggable="false" onDragStart={(event) => event.preventDefault()} />
                       </div>
                     )}
 
-                    {result && !loading && !showDifference && (
+                    {result && !loading && !filterLoading && !showDifference && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
                         {hasDetectedNoise && (
                           <div
@@ -1136,30 +1121,50 @@ function App() {
                       <thead>
                         <tr>
                           <th>Filter Method</th>
-                          <th>PSNR Improvement</th>
-                          <th>SSIM Retention</th>
-                          <th>Runtime</th>
+                          <th className="tooltip-trigger">
+                            Execution Time
+                            <span className="tooltip-content">Time in milliseconds to apply the filter. Lower is faster.</span>
+                          </th>
+                          <th className="tooltip-trigger">
+                            Edge Preservation Ratio
+                            <span className="tooltip-content">Correlation of image edge maps before and after filtering. 1.0 is perfect preservation.</span>
+                          </th>
+                          <th className="tooltip-trigger">
+                            Variance of Laplacian (Sharpness)
+                            <span className="tooltip-content">High-frequency detail variance of the restored image. Higher values represent a sharper image.</span>
+                          </th>
+                          <th className="tooltip-trigger">
+                            BRISQUE
+                            <span className="tooltip-content">Blind/Referenceless Image Spatial Quality Evaluator (0 to 100). Lower is better quality.</span>
+                          </th>
+                          <th className="tooltip-trigger">
+                            NIQE
+                            <span className="tooltip-content">Naturalness Image Quality Evaluator. Measures distance to natural image statistics. Lower is better.</span>
+                          </th>
                           <th>Status</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {getComparativeMetrics(
-                          result ? result.analysis.detected_noise : 'NONE_BASE',
-                          result ? result.analysis.estimated_sigma : 22,
-                          result ? result.analysis.histogram_spike : 0.4
-                        ).map((filter) => {
-                          const isSelected = result && filter.selected;
+                        {(result.filter_metrics || []).map((filter) => {
+                          const isActive = filter.id === activeFilterId;
                           return (
-                            <tr key={filter.id} className={isSelected ? 'row-selected' : ''}>
-                              <td style={{ fontWeight: isSelected ? '600' : 'normal' }}>{filter.name}</td>
-                              <td className="metric-value-mono">{isSelected ? `+${filter.psnr} dB` : filter.psnr !== '0.00' ? `+${filter.psnr} dB` : '0.00 dB'}</td>
-                              <td className="metric-value-mono">{filter.ssim}</td>
-                              <td className="metric-value-mono">{filter.runtime} ms</td>
+                            <tr
+                              key={filter.id}
+                              className={isActive ? 'row-selected' : ''}
+                              onClick={() => handleFilterSwitch(filter.id)}
+                              title={isActive ? 'Currently active filter' : `Apply ${filter.name}`}
+                            >
+                              <td style={{ fontWeight: isActive ? '600' : 'normal' }}>{filter.name}</td>
+                              <td className="metric-value-mono">{filter.runtime_ms} ms</td>
+                              <td className="metric-value-mono">{(filter.edge_preservation ?? 0).toFixed(4)}</td>
+                              <td className="metric-value-mono">{(filter.laplacian_var ?? 0).toFixed(1)}</td>
+                              <td className="metric-value-mono">{(filter.brisque ?? 0).toFixed(2)}</td>
+                              <td className="metric-value-mono">{(filter.niqe ?? 0).toFixed(2)}</td>
                               <td>
-                                {isSelected ? (
-                                  <span className="row-selected-badge">Selected (Optimal)</span>
+                                {isActive ? (
+                                  <span className="row-selected-badge">Active</span>
                                 ) : (
-                                  <span className="row-eval-badge">{filter.reason || 'Evaluated'}</span>
+                                  <span className="row-apply-badge">Apply</span>
                                 )}
                               </td>
                             </tr>
