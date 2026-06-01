@@ -179,7 +179,11 @@ def niqe(img):
     features_mu = np.mean(features, axis=0)
     features_cov = np.cov(features.T)
 
-    pseudoinv_of_avg_cov = np.linalg.pinv((model_cov + features_cov) / 2)
+    # Add a small regularization term to the diagonal to stabilize the covariance matrix inverse
+    avg_cov = (model_cov + features_cov) / 2
+    avg_cov += np.eye(avg_cov.shape[0]) * 1e-4
+
+    pseudoinv_of_avg_cov = np.linalg.pinv(avg_cov)
     diff = model_mu.ravel() - features_mu
     niqe_quality = math.sqrt(diff.dot(pseudoinv_of_avg_cov.dot(diff)))
     return round(float(niqe_quality), 4)

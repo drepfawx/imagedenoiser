@@ -1294,7 +1294,7 @@ function App() {
                               </td>
                               <td className="metric-value-mono">
                                 {filter.laplacian_var !== null && filter.laplacian_var !== undefined
-                                  ? filter.laplacian_var.toFixed(1)
+                                  ? `${filter.laplacian_var.toFixed(1)}%`
                                   : '—'}
                               </td>
                               <td className="metric-value-mono">
