@@ -89,8 +89,8 @@ function loadImage(src) {
   });
 }
 
-const API_URL = 'http://127.0.0.1:8000/api/process';
-const FILTER_API_URL = 'http://127.0.0.1:8000/api/apply-filter';
+const API_URL = '/api/process';
+const FILTER_API_URL = '/api/apply-filter';
 
 function App() {
   const [isLightMode, setIsLightMode] = useState(false);
