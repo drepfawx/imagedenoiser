@@ -5,7 +5,17 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
+from tqdm import tqdm
 import numpy as np
+from datetime import datetime
+
+_log_file = None
+
+def log(msg):
+    print(msg)
+    if _log_file:
+        _log_file.write(msg + "\n")
+        _log_file.flush()
 
 class SimpleCNNDenoiser(nn.Module):
     def __init__(self):
@@ -28,7 +38,21 @@ class SimpleCNNDenoiser(nn.Module):
 
 class DenoisingDataset(Dataset):
     def __init__(self, image_dir):
-        self.image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(('png', 'jpg', 'jpeg'))]
+        all_files = [f for f in os.listdir(image_dir) if f.endswith(('png', 'jpg', 'jpeg'))]
+
+        self.image_paths = []
+        log(f"loading images from '{image_dir}'...")
+        for f in tqdm(all_files, desc="Loading images", unit="img"):
+            path = os.path.join(image_dir, f)
+            try:
+                img = Image.open(path)
+                img.verify()  # validate that the file is a proper image
+                self.image_paths.append(path)
+            except Exception:
+                log(f"  skipping invalid image: {f}")
+
+        log(f"loaded {len(self.image_paths)} valid images (each will produce 20 random crops per epoch)")
+
         # we crop images into small patches for faster training and lower memory use
         self.transform = transforms.Compose([
             transforms.RandomCrop(128),
@@ -53,14 +77,19 @@ class DenoisingDataset(Dataset):
 
 # training loop
 def train():
+    global _log_file
+    _log_file = open("training_log.txt", "w", encoding="utf-8")
+    log(f"training started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"training with: {device}")
+    log(f"training with: {device}")
     
     model = SimpleCNNDenoiser().to(device)
     dataset = DenoisingDataset("dataset")
     
     if len(dataset) == 0:
-        print("no images found in the 'dataset' folder")
+        log("no images found in the 'dataset' folder")
+        _log_file.close()
         return
         
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
@@ -68,12 +97,15 @@ def train():
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    epochs = 15
+    epochs = 10
     
-    print("starting model training...")
+    log("starting model training...")
     for epoch in range(epochs):
         running_loss = 0.0
-        for noisy_imgs, clean_imgs in dataloader:
+        
+        progress_bar = tqdm(dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", unit="batch")
+        
+        for noisy_imgs, clean_imgs in progress_bar:
             noisy_imgs, clean_imgs = noisy_imgs.to(device), clean_imgs.to(device)
             
             optimizer.zero_grad()
@@ -89,12 +121,15 @@ def train():
             optimizer.step()
             
             running_loss += loss.item()
-            
-        print(f"epoch [{epoch+1}/{epochs}] | loss: {running_loss/len(dataloader):.5f}")
+
+            progress_bar.set_postfix(loss=f"{loss.item():.5f}")
+
+        avg_loss = running_loss / len(dataloader)    
+        log(f"epoch [{epoch+1}/{epochs}] | loss: {avg_loss:.5f}\n")
         
-    # Save the trained model
     torch.save(model.state_dict(), "my_model.pth")
-    print("training complete. saved model as 'my_model.pth'.")
+    log(f"training complete at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. saved model as 'my_model.pth'.")
+    _log_file.close()
 
 if __name__ == "__main__":
     train()
