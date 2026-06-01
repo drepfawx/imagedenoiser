@@ -275,9 +275,23 @@ def process_image(file: UploadFile = File(...)):
         mad = np.median(np.abs(laplacian - np.median(laplacian))) / 0.6745
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
         
+        # calculating isolated white and black pixels to filter out large solid regions (e.g. skies, borders)
+        white_mask = (gray == 255).astype(np.uint8)
+        black_mask = (gray == 0).astype(np.uint8)
         
-        salt_spike = hist[255] / (hist[254] + 1e-5)
-        pepper_spike = hist[0] / (hist[1] + 1e-5)
+        kernel = np.ones((3, 3), np.uint8)
+        eroded_white = cv2.erode(white_mask, kernel, iterations=1)
+        eroded_black = cv2.erode(black_mask, kernel, iterations=1)
+        
+        isolated_white = float(np.sum(white_mask) - np.sum(eroded_white))
+        isolated_black = float(np.sum(black_mask) - np.sum(eroded_black))
+        
+        # average of neighboring bins to stabilize the denominator against quantization/single-bin dropouts
+        near_white_avg = float(np.mean(hist[250:255]))
+        near_black_avg = float(np.mean(hist[1:6]))
+        
+        salt_spike = isolated_white / (near_white_avg + 1e-5)
+        pepper_spike = isolated_black / (near_black_avg + 1e-5)
         
         final_sigma = float(mad)
         final_spike = float(max(salt_spike, pepper_spike))

@@ -1281,23 +1281,23 @@ function App() {
                       <thead>
                         <tr>
                           <th>Filter Method</th>
-                          <th className="tooltip-trigger">
+                          <th className="tooltip-trigger" tabIndex={0}>
                             Execution Time
                             <span className="tooltip-content">Time in milliseconds to apply the filter. Lower is faster.</span>
                           </th>
-                          <th className="tooltip-trigger">
+                          <th className="tooltip-trigger" tabIndex={0}>
                             Edge Preservation Ratio
                             <span className="tooltip-content">Correlation of image edge maps before and after filtering. 1.0 is perfect preservation.</span>
                           </th>
-                          <th className="tooltip-trigger">
+                          <th className="tooltip-trigger" tabIndex={0}>
                             Variance of Laplacian (Sharpness)
                             <span className="tooltip-content">High-frequency detail variance of the restored image. Higher values represent a sharper image.</span>
                           </th>
-                          <th className="tooltip-trigger">
+                          <th className="tooltip-trigger" tabIndex={0}>
                             BRISQUE
                             <span className="tooltip-content">Blind/Referenceless Image Spatial Quality Evaluator (0 to 100). Lower is better quality.</span>
                           </th>
-                          <th className="tooltip-trigger">
+                          <th className="tooltip-trigger" tabIndex={0}>
                             NIQE
                             <span className="tooltip-content">Naturalness Image Quality Evaluator. Measures distance to natural image statistics. Lower is better.</span>
                           </th>

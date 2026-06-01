@@ -1298,9 +1298,13 @@ body.theme-light .pipeline-node.node-active .node-icon-circle {
   text-align: center;
 }
 
-.results-table tr {
+.results-table tbody tr {
   transition: all 0.25s ease;
   cursor: pointer;
+}
+
+.results-table thead tr {
+  cursor: default;
 }
 
 .results-table tbody tr:hover {
@@ -2102,9 +2106,9 @@ body.theme-light .tooltip-trigger {
   visibility: hidden;
   opacity: 0;
   position: absolute;
-  bottom: 120%;
+  top: calc(100% + 8px);
   left: 50%;
-  transform: translate(-50%, 4px);
+  transform: translate(-50%, -4px);
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
   backdrop-filter: blur(14px);
@@ -2129,18 +2133,25 @@ body.theme-light .tooltip-trigger {
 .tooltip-content::after {
   content: "";
   position: absolute;
-  top: 100%;
+  bottom: 100%;
+  top: auto;
   left: 50%;
   transform: translateX(-50%);
   border-width: 6px;
   border-style: solid;
-  border-color: var(--border-color) transparent transparent transparent;
+  border-color: transparent transparent var(--border-color) transparent;
 }
 
-.tooltip-trigger:hover .tooltip-content {
+.tooltip-trigger:hover .tooltip-content,
+.tooltip-trigger:focus .tooltip-content,
+.tooltip-trigger:focus-within .tooltip-content {
   visibility: visible;
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.tooltip-trigger:focus {
+  outline: none;
 }
 
 /* ensure tooltips are not clipped by results table container */
