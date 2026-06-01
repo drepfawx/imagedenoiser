@@ -1412,9 +1412,25 @@ body.theme-light .results-table tbody tr:hover .row-apply-badge {
   }
 
   .theme-switch {
-    position: static;
-    margin: 10px auto;
-    width: fit-content;
+    position: absolute !important;
+    top: 12px !important;
+    right: 12px !important;
+    margin: 0 !important;
+    width: 64px !important;
+    display: block !important;
+  }
+
+  .theme-switch .toggle {
+    padding: 0 8px !important;
+    display: flex !important;
+  }
+
+  .theme-switch .knob {
+    left: 6px !important;
+  }
+
+  .theme-switch.light .knob {
+    left: calc(100% - 6px - 20px) !important;
   }
 
   .viewer-shell.is-expanded {
@@ -1440,9 +1456,9 @@ body.theme-light .results-table tbody tr:hover .row-apply-badge {
   }
 
   .comparison-wrapper {
-    height: auto;
-    max-height: 44vh;
-    max-width: min(100%, calc(44vh * var(--aspect-ratio)));
+    height: auto !important;
+    max-height: 85vh !important;
+    max-width: min(100%, calc(85vh * var(--aspect-ratio))) !important;
     min-height: 240px;
   }
 
@@ -1451,7 +1467,11 @@ body.theme-light .results-table tbody tr:hover .row-apply-badge {
   }
 
   .viewer-image {
-    max-height: 44vh;
+    max-height: 85vh !important;
+  }
+
+  .upload-zone {
+    padding: 35px 20px 45px !important; /* spacious padding, bigger downwards */
   }
 
 }
@@ -2323,11 +2343,49 @@ body.theme-light .row-queued-badge {
     min-height: 200px;
   }
 
-  .upload-zone {
-    padding: 20px 10px !important;
+  .viewer-panel {
+    min-height: 280px;
+  }
+}
+
+/* 5. optimize layout for landscape mobile viewports (short height) */
+@media (max-height: 550px) and (orientation: landscape) {
+  .app-header {
+    margin-bottom: 10px;
+    padding-top: 10px;
+  }
+  
+  .app-header h1 {
+    font-size: 20px;
+  }
+  
+  .app-header p {
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  
+  .dashboard-container {
+    padding: 10px 14px 20px;
+    gap: 12px;
   }
 
   .viewer-panel {
-    min-height: 280px;
+    min-height: 240px;
+  }
+
+  .comparison-wrapper {
+    height: auto;
+    min-height: 180px;
+  }
+
+  .image-stage {
+    min-height: 180px;
+  }
+}
+
+/* 6. Hide hover magnifier globally on touch devices (no hover cursor) */
+@media (pointer: coarse) {
+  .viewer-control-btn--magnifier {
+    display: none;
   }
 }
