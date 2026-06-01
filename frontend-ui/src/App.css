@@ -1563,8 +1563,8 @@ body.theme-light .results-table tbody tr:hover .row-apply-badge {
 
   .comparison-wrapper {
     height: auto;
-    max-height: 36vh;
-    max-width: min(100%, calc(36vh * var(--aspect-ratio)));
+    max-height: 70vh;
+    max-width: min(100%, calc(70vh * var(--aspect-ratio)));
     min-height: 200px;
     border-radius: 16px;
   }
@@ -1574,7 +1574,7 @@ body.theme-light .results-table tbody tr:hover .row-apply-badge {
   }
 
   .viewer-image {
-    max-height: 36vh;
+    max-height: 70vh;
   }
 
   .viewer-controls {
@@ -2252,7 +2252,7 @@ body.theme-light .row-queued-badge {
     flex-direction: column !important;
     gap: 20px !important;
   }
-  
+
   .bottom-row {
     grid-template-columns: 1fr !important;
     gap: 20px !important;
@@ -2293,11 +2293,11 @@ body.theme-light .row-queued-badge {
     width: 100% !important;
     display: block !important;
   }
-  
+
   .results-panel {
     overflow: hidden !important;
   }
-  
+
   .results-table {
     display: table !important;
     width: 100% !important;
@@ -2311,7 +2311,7 @@ body.theme-light .row-queued-badge {
     height: auto !important;
     min-height: 200px;
   }
-  
+
   .upload-zone {
     padding: 20px 10px !important;
   }

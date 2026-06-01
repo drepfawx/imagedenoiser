@@ -134,6 +134,27 @@ function App() {
   const activeFetchesRef = useRef({});
   const filterAbortControllerRef = useRef(null);
   const resultRef = useRef(result);
+  const hasScrolledRef = useRef(false);
+
+  const scrollToViewer = () => {
+    if (window.innerWidth > 1024) return; // only scroll on stacked mobile/tablet viewports
+
+    const element = viewerPanelRef.current;
+    if (element) {
+      const elementPosition = element.getBoundingClientRect().top + window.scrollY;
+      const offsetPosition = elementPosition - 10; // 10px offset (halved gap)
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!result) {
+      hasScrolledRef.current = false;
+    }
+  }, [result]);
 
   useEffect(() => {
     resultRef.current = result;
@@ -141,9 +162,10 @@ function App() {
 
   // auto-scroll to viewer when result is ready
   useEffect(() => {
-    if (result && !loading) {
+    if (result && !loading && !hasScrolledRef.current) {
       const timer = setTimeout(() => {
-        viewerPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        scrollToViewer();
+        hasScrolledRef.current = true;
       }, 100);
       return () => clearTimeout(timer);
     }
@@ -530,6 +552,8 @@ function App() {
   // switch to a different denoising filter on the already-analyzed image
   const handleFilterSwitch = async (filterId) => {
     if (!selectedFile || !result || loading) return;
+
+    scrollToViewer();
 
     if (filterId === activeFilterId) {
       clearViewerModes();
