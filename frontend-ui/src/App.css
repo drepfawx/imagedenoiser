@@ -2376,6 +2376,14 @@ body.theme-light .row-queued-badge {
   .comparison-wrapper {
     height: auto;
     min-height: 180px;
+    max-height: none !important; /* break out of the 85vh limit on short screens */
+    max-width: min(100%, 340px) !important; /* let the vertical photo expand in width */
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .viewer-image {
+    max-height: none !important;
   }
 
   .image-stage {
