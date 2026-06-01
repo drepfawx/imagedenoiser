@@ -139,6 +139,16 @@ function App() {
     resultRef.current = result;
   }, [result]);
 
+  // auto-scroll to viewer when result is ready
+  useEffect(() => {
+    if (result && !loading) {
+      const timer = setTimeout(() => {
+        viewerPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [result, loading]);
+
   const splitMarkerPosition = Math.max(1, Math.min(99, Number(sliderPos)));
 
   const selectedFileKey = selectedFile
@@ -149,6 +159,7 @@ function App() {
   const fileRef = useRef(null);
   const bodyOverflowRef = useRef('');
   const baselineZoomRef = useRef(null);
+  const viewerPanelRef = useRef(null);
   const viewerShellRef = useRef(null);
   const comparisonWrapperRef = useRef(null);
 
@@ -969,7 +980,7 @@ function App() {
           </aside>
 
           <div className="right-column">
-            <section className="panel viewer-panel">
+            <section className="panel viewer-panel" ref={viewerPanelRef}>
               <div className="panel-header">
                 <span className="truncate-text">
                   Viewer {selectedFile && `- ${selectedFile.name}`}
@@ -982,7 +993,7 @@ function App() {
                     {result && !loading && !filterLoading && (
                       <div className={`viewer-controls ${isMagnifierEnabled ? 'viewer-controls--has-preview' : ''}`}>
                         <div className="viewer-controls-row">
-                          <button type="button" className={`viewer-control-btn ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading || filterLoading}>
+                          <button type="button" className={`viewer-control-btn viewer-control-btn--magnifier ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading || filterLoading}>
                             <MagnifierIcon />
                           </button>
                           <button type="button" className={`viewer-control-btn ${showDifference ? 'active' : ''}`} onClick={() => isDifferenceUsable && handleDifferenceToggle()} disabled={!isDifferenceUsable || loading || filterLoading || isMagnifierEnabled} aria-label="Toggle isolated noise view" title={isDifferenceUsable ? 'Isolated noise view' : (!activeFilterId ? 'Apply a filter to isolate differences' : 'No difference data available')}>

@@ -1017,8 +1017,6 @@ body.theme-light .viewer-control-btn.active {
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
-  max-width: 290px;
-  margin: 0 auto;
   gap: 0;
 }
 
@@ -2211,4 +2209,114 @@ body.theme-light .row-queued-badge {
   background: rgba(0, 0, 0, 0.02);
   color: var(--text-muted);
   border-color: var(--border-color);
+}
+
+/* responsive mobile layout adjustments */
+
+/* 1. hide magnifier on mobile screens, adjust theme switch and header padding */
+@media (max-width: 768px) {
+  .viewer-control-btn--magnifier {
+    display: none !important;
+  }
+
+  .theme-switch {
+    position: absolute !important;
+    top: 12px !important;
+    right: 12px !important;
+    width: 64px !important;
+    display: block !important;
+  }
+
+  .theme-switch .toggle {
+    padding: 0 8px !important;
+    display: flex !important;
+  }
+
+  .theme-switch .knob {
+    left: 6px !important;
+  }
+
+  .theme-switch.light .knob {
+    left: calc(100% - 6px - 20px) !important;
+  }
+
+  .app-header {
+    padding-top: 40px !important;
+  }
+}
+
+/* 2. stack grid columns for top and bottom rows on medium/small viewports */
+@media (max-width: 1024px) {
+  .top-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 20px !important;
+  }
+  
+  .bottom-row {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+  }
+
+  .left-column,
+  .right-column {
+    display: contents !important;
+  }
+
+  .input-panel {
+    order: 1 !important;
+    height: auto !important;
+  }
+
+  .viewer-panel {
+    order: 2 !important;
+    height: auto !important;
+    min-height: 350px;
+  }
+
+  .analysis-panel {
+    order: 3 !important;
+    margin-top: 0 !important;
+  }
+
+  .bottom-row {
+    order: 4 !important;
+  }
+}
+
+/* 3. contain wide metrics table within horizontal scroll on mobile */
+@media (max-width: 768px) {
+  .results-table-wrapper {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    width: 100% !important;
+    display: block !important;
+  }
+  
+  .results-panel {
+    overflow: hidden !important;
+  }
+  
+  .results-table {
+    display: table !important;
+    width: 100% !important;
+    min-width: 600px;
+  }
+}
+
+/* 4. fix upload zone and input panel sizing on smaller viewports */
+@media (max-width: 640px) {
+  .input-panel {
+    height: auto !important;
+    min-height: 200px;
+  }
+  
+  .upload-zone {
+    padding: 20px 10px !important;
+  }
+
+  .viewer-panel {
+    min-height: 280px;
+  }
 }
