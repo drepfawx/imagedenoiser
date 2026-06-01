@@ -1014,7 +1014,7 @@ function App() {
               <div className="viewer-shell" ref={viewerShellRef}>
                 <div className="viewer-main">
                   <div className={`comparison-wrapper ${showDifference ? 'difference-mode' : ''}`} ref={comparisonWrapperRef} onDragStart={(event) => event.preventDefault()} style={{ '--aspect-ratio': String(viewerAspectRatio), aspectRatio: 'var(--aspect-ratio)', minHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : (previewUrl ? '0' : undefined), height: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, maxHeight: frozenViewerHeight ? `${frozenViewerHeight}px` : undefined, '--magnifier-zoom': magnifierZoom, '--split-pos': splitMarkerPosition }}>
-                    {result && !loading && !filterLoading && (
+                    {result && !loading && !filterLoading && activeFilterId && (
                       <div className={`viewer-controls ${isMagnifierEnabled ? 'viewer-controls--has-preview' : ''}`}>
                         <div className="viewer-controls-row">
                           <button type="button" className={`viewer-control-btn viewer-control-btn--magnifier ${isMagnifierEnabled ? 'active' : ''}`} onClick={handleMagnifierToggle} aria-label="Toggle hover magnifier" title="Hover magnifier" disabled={showDifference || loading || filterLoading}>

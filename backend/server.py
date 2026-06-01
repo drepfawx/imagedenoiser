@@ -275,14 +275,19 @@ def process_image(file: UploadFile = File(...)):
         mad = np.median(np.abs(laplacian - np.median(laplacian))) / 0.6745
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
         
+        
         salt_spike = hist[255] / (hist[254] + 1e-5)
         pepper_spike = hist[0] / (hist[1] + 1e-5)
         
         final_sigma = float(mad)
         final_spike = float(max(salt_spike, pepper_spike))
 
+        # if sigma's near zero, the image is clean and any histogram spike is from solid regions (black bars, white UI), not noise
+        if final_sigma <= 1.0:
+            final_spike = 0.0
+
         # determine auto-selected filter
-        if final_spike > 3.5:
+        if final_spike > 3.5 and final_sigma > 1.0:
             system_decision = "salt_and_pepper"
             algorithm_used = "Median filter (OpenCV MedianBlur)"
             best_filter_id = "median"
@@ -326,15 +331,6 @@ def process_image(file: UploadFile = File(...)):
                     "niqe": None,
                     "utility_score": None
                 })
-
-        # saving cleaned image to disk
-        output_dir = "saved_results"
-        os.makedirs(output_dir, exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"cleaned_{timestamp}.png"
-        filepath = os.path.join(output_dir, filename)
-        cv2.imwrite(filepath, cleaned_img)
-        print(f"Saved cleaned image: {filepath}")
 
         # compute noisy and cleaned histograms
         noisy_hist = compute_luminance_histogram(input_img)
