@@ -7,6 +7,9 @@ import base64
 import os
 import time
 import datetime
+import glob as _glob
+import random as _random
+from skimage.metrics import peak_signal_noise_ratio as _psnr, structural_similarity as _ssim
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -251,6 +254,78 @@ def run_filter_with_metrics(input_img, filter_fn):
         "utility_score": utility_score,
     }
 
+# --- benchmark / evaluation utilities ---
+
+DATASET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataset")
+
+def compute_psnr(original, restored):
+    return round(float(_psnr(original, restored, data_range=255)), 2)
+
+def compute_ssim(original, restored):
+    g1 = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+    g2 = cv2.cvtColor(restored, cv2.COLOR_BGR2GRAY)
+    return round(float(_ssim(g1, g2, data_range=255)), 4)
+
+def compute_mse(original, restored):
+    raw = np.mean((original.astype(np.float64) - restored.astype(np.float64)) ** 2)
+    return round(float(raw / (255.0 ** 2)), 6)
+
+def add_gaussian_noise(img, sigma):
+    noise = np.random.normal(0, sigma, img.shape).astype(np.float32)
+    return np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+def add_salt_pepper_noise(img, ratio):
+    noisy = img.copy()
+    h, w = img.shape[:2]
+    n = int(h * w * ratio / 2)
+    ys, xs = np.random.randint(0, h, n), np.random.randint(0, w, n)
+    noisy[ys, xs] = 255
+    ys, xs = np.random.randint(0, h, n), np.random.randint(0, w, n)
+    noisy[ys, xs] = 0
+    return noisy
+
+def detect_noise_type(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    mad = np.median(np.abs(laplacian - np.median(laplacian))) / 0.6745
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
+    white_mask = (gray == 255).astype(np.uint8)
+    black_mask = (gray == 0).astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    eroded_white = cv2.erode(white_mask, kernel, iterations=1)
+    eroded_black = cv2.erode(black_mask, kernel, iterations=1)
+    isolated_white = float(np.sum(white_mask) - np.sum(eroded_white))
+    isolated_black = float(np.sum(black_mask) - np.sum(eroded_black))
+    near_white_avg = float(np.mean(hist[250:255]))
+    near_black_avg = float(np.mean(hist[1:6]))
+    spike = float(max(isolated_white / (near_white_avg + 1e-5), isolated_black / (near_black_avg + 1e-5)))
+    sigma = float(mad)
+    if sigma <= 1.0:
+        spike = 0.0
+    if spike > 3.5 and sigma > 1.0:
+        return "salt_and_pepper"
+    elif sigma > 12.0:
+        return "gaussian"
+    return "none"
+
+def _load_dataset_images(n, max_dim):
+    files = []
+    for pat in ["*.png", "*.jpg", "*.JPG", "*.jpeg", "*.PNG", "*.JPEG"]:
+        files.extend(_glob.glob(os.path.join(DATASET_DIR, pat)))
+    if not files:
+        return []
+    imgs = []
+    for path in _random.sample(files, min(n, len(files))):
+        img = cv2.imread(path)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        if max(h, w) > max_dim:
+            s = max_dim / max(h, w)
+            img = cv2.resize(img, (int(w * s), int(h * s)))
+        imgs.append(img)
+    return imgs
+
 # all available filters
 FILTER_REGISTRY = {
     "gaussian":  {"name": "Gaussian Filter",       "fn": lambda img: cv2.GaussianBlur(img, (5, 5), 0)},
@@ -422,6 +497,141 @@ def apply_filter(
                 "residual_mask": residual_mask
             },
             "metrics": metrics
+        }
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/benchmark")
+def run_benchmark(n: int = Query(default=10, description="Number of dataset images to evaluate")):
+    try:
+        images = _load_dataset_images(n, max_dim=256)
+        if not images:
+            return JSONResponse(status_code=404, content={"error": "No dataset images found in dataset/"})
+
+        filter_ids = list(FILTER_REGISTRY.keys())
+
+        gaussian_configs = [
+            {"label": "σ=15", "sigma": 15},
+            {"label": "σ=25", "sigma": 25},
+            {"label": "σ=35", "sigma": 35},
+            {"label": "σ=50", "sigma": 50},
+        ]
+        sp_configs = [
+            {"label": "2%",  "ratio": 0.02},
+            {"label": "5%",  "ratio": 0.05},
+            {"label": "10%", "ratio": 0.10},
+            {"label": "20%", "ratio": 0.20},
+        ]
+
+        def eval_level(noisy_images):
+            acc = {fid: {"psnr": [], "ssim": [], "mse": [], "time": []} for fid in filter_ids}
+            for orig, noisy in zip(images, noisy_images):
+                for fid in filter_ids:
+                    try:
+                        t0 = time.perf_counter()
+                        cleaned = FILTER_REGISTRY[fid]["fn"](noisy)
+                        rt = (time.perf_counter() - t0) * 1000
+                        acc[fid]["psnr"].append(compute_psnr(orig, cleaned))
+                        acc[fid]["ssim"].append(compute_ssim(orig, cleaned))
+                        acc[fid]["mse"].append(compute_mse(orig, cleaned))
+                        acc[fid]["time"].append(rt)
+                    except Exception as ex:
+                        print(f"benchmark error [{fid}]: {ex}")
+            return {
+                fid: {
+                    "psnr":    round(float(np.mean(v["psnr"])),    2) if v["psnr"]  else None,
+                    "ssim":    round(float(np.mean(v["ssim"])),    4) if v["ssim"]  else None,
+                    "mse":     round(float(np.mean(v["mse"])),     6) if v["mse"]   else None,
+                    "time_ms": round(float(np.mean(v["time"])),    1) if v["time"]  else None,
+                }
+                for fid, v in acc.items()
+            }
+
+        gaussian_levels = []
+        for cfg in gaussian_configs:
+            noisy_imgs = [add_gaussian_noise(img, cfg["sigma"]) for img in images]
+            gaussian_levels.append({"label": cfg["label"], "results": eval_level(noisy_imgs)})
+
+        sp_levels = []
+        for cfg in sp_configs:
+            noisy_imgs = [add_salt_pepper_noise(img, cfg["ratio"]) for img in images]
+            sp_levels.append({"label": cfg["label"], "results": eval_level(noisy_imgs)})
+
+        # summary: average across all noise configs
+        all_levels = gaussian_levels + sp_levels
+        summary = {}
+        for fid in filter_ids:
+            agg = {"psnr": [], "ssim": [], "mse": [], "time_ms": []}
+            for lvl in all_levels:
+                r = lvl["results"].get(fid, {})
+                for k in agg:
+                    if r.get(k) is not None:
+                        agg[k].append(r[k])
+            summary[fid] = {
+                "psnr":    round(float(np.mean(agg["psnr"])),    2) if agg["psnr"]    else None,
+                "ssim":    round(float(np.mean(agg["ssim"])),    4) if agg["ssim"]    else None,
+                "mse":     round(float(np.mean(agg["mse"])),     6) if agg["mse"]     else None,
+                "time_ms": round(float(np.mean(agg["time_ms"])), 1) if agg["time_ms"] else None,
+            }
+
+        return {
+            "status": "success",
+            "n_images": len(images),
+            "filter_names": {fid: FILTER_REGISTRY[fid]["name"] for fid in filter_ids},
+            "gaussian":    gaussian_levels,
+            "salt_pepper": sp_levels,
+            "summary":     summary,
+        }
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/confusion-matrix")
+def run_confusion_matrix(n: int = Query(default=8, description="Number of source images")):
+    try:
+        files = []
+        for pat in ["*.png", "*.jpg", "*.JPG", "*.jpeg", "*.PNG", "*.JPEG"]:
+            files.extend(_glob.glob(os.path.join(DATASET_DIR, pat)))
+        if not files:
+            return JSONResponse(status_code=404, content={"error": "No dataset images found in dataset/"})
+
+        selected = _random.sample(files, min(n, len(files)))
+        classes = ["gaussian", "salt_and_pepper", "none"]
+        matrix = {actual: {pred: 0 for pred in classes} for actual in classes}
+        total  = {cls: 0 for cls in classes}
+
+        for path in selected:
+            orig = cv2.imread(path)
+            if orig is None:
+                continue
+            h, w = orig.shape[:2]
+            if max(h, w) > 512:
+                s = 512 / max(h, w)
+                orig = cv2.resize(orig, (int(w * s), int(h * s)))
+
+            test_cases = [
+                ("none",            orig),
+                ("gaussian",        add_gaussian_noise(orig, 25)),
+                ("gaussian",        add_gaussian_noise(orig, 50)),
+                ("salt_and_pepper", add_salt_pepper_noise(orig, 0.05)),
+                ("salt_and_pepper", add_salt_pepper_noise(orig, 0.10)),
+            ]
+            for actual, noisy in test_cases:
+                predicted = detect_noise_type(noisy)
+                matrix[actual][predicted] += 1
+                total[actual] += 1
+
+        return {
+            "status": "success",
+            "n_images": len(selected),
+            "matrix": matrix,
+            "total_per_class": total,
+            "classes": classes,
         }
     except Exception as e:
         import traceback

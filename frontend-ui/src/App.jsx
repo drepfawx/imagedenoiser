@@ -80,6 +80,87 @@ function MonitorDisplayIcon() {
   );
 }
 
+const FILTER_COLORS = {
+  gaussian: '#3b82f6',
+  median: '#10b981',
+  bilateral: '#f59e0b',
+  nlm: '#ef4444',
+  cnn: '#8b5cf6',
+};
+
+const SHORT_NAME = (full = '') =>
+  full.replace(' Filter', '').replace(' Denoiser', '')
+    .replace('Non-Local Means (NLM)', 'NLM').replace('PyTorch CNN', 'CNN');
+
+const fmtMs = ms => ms == null ? '—' : ms < 1 ? ms.toFixed(3) : ms < 10 ? ms.toFixed(1) : String(Math.round(ms));
+
+function BenchTable({ data, filterNames }) {
+  if (!data?.length) return null;
+  const fids = Object.keys(data[0]?.results || {});
+  if (!fids.length) return null;
+
+  const avgOf = (fid, key) => {
+    const vals = data.map(l => l.results[fid]?.[key]).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const bestPerLevel = data.map(lvl =>
+    fids.reduce((b, f) => (lvl.results[f]?.psnr ?? -Infinity) > (lvl.results[b]?.psnr ?? -Infinity) ? f : b, fids[0])
+  );
+  const fastestPerLevel = data.map(lvl =>
+    fids.reduce((b, f) => {
+      const tb = lvl.results[b]?.time_ms, tf = lvl.results[f]?.time_ms;
+      return (tf != null && (tb == null || tf < tb)) ? f : b;
+    }, fids[0])
+  );
+  const bestAvg = fids.reduce((b, f) => (avgOf(f, 'psnr') ?? -Infinity) > (avgOf(b, 'psnr') ?? -Infinity) ? f : b, fids[0]);
+  const fastestAvg = fids.reduce((b, f) => {
+    const tb = avgOf(b, 'time_ms'), tf = avgOf(f, 'time_ms');
+    return (tf != null && (tb == null || tf < tb)) ? f : b;
+  }, fids[0]);
+
+  return (
+    <>
+      <table className="bench-table">
+        <thead>
+          <tr>
+            <th>Filter</th>
+            {data.map(l => <th key={l.label}>{l.label}</th>)}
+            <th>Avg</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fids.map(fid => (
+            <tr key={fid}>
+              <td className="bench-filter-cell">
+                <span className="eval-filter-dot" style={{ background: FILTER_COLORS[fid] }} />
+                {SHORT_NAME(filterNames?.[fid])}
+              </td>
+              {data.map((lvl, li) => {
+                const p = lvl.results[fid]?.psnr;
+                const s = lvl.results[fid]?.ssim;
+                const t = lvl.results[fid]?.time_ms;
+                return (
+                  <td key={lvl.label} className={`bench-cell${fid === bestPerLevel[li] ? ' bench-cell--best' : ''}`}>
+                    <span className="bench-psnr">{p != null ? p.toFixed(1) : '—'}</span>
+                    {s != null && <span className="bench-ssim">{s.toFixed(3)}</span>}
+                    {t != null && <span className={`bench-time${fid === fastestPerLevel[li] ? ' bench-time--fastest' : ''}`}>{fmtMs(t)}ms</span>}
+                  </td>
+                );
+              })}
+              <td className={`bench-cell${fid === bestAvg ? ' bench-cell--best-avg' : ''}`}>
+                <span className="bench-psnr">{avgOf(fid, 'psnr')?.toFixed(1) ?? '—'}</span>
+                {avgOf(fid, 'ssim') != null && <span className="bench-ssim">{avgOf(fid, 'ssim').toFixed(3)}</span>}
+                {avgOf(fid, 'time_ms') != null && <span className={`bench-time${fid === fastestAvg ? ' bench-time--fastest' : ''}`}>{fmtMs(avgOf(fid, 'time_ms'))}ms</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="bench-note">PSNR (dB) · SSIM · ms · <span className="bench-note-green">green</span> = best PSNR · <span className="bench-note-blue">blue</span> = best avg · <span className="bench-note-purple">purple</span> = fastest</p>
+    </>
+  );
+}
+
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -126,6 +207,12 @@ function App() {
 
   const [backgroundQueue, setBackgroundQueueState] = useState([]);
   const backgroundQueueRef = useRef([]);
+
+  const [benchmarkData, setBenchmarkData] = useState(null);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [confusionData, setConfusionData] = useState(null);
+  const [evalError, setEvalError] = useState('');
+  const [lastRunTime, setLastRunTime] = useState('');
   const setBackgroundQueue = (queue) => {
     backgroundQueueRef.current = queue;
     setBackgroundQueueState(queue);
@@ -546,6 +633,33 @@ function App() {
       setError(processingError?.message || 'Processing failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRunEvaluation = async () => {
+    setBenchmarkLoading(true);
+    setEvalError('');
+    setBenchmarkData(null);
+    setConfusionData(null);
+    try {
+      const [benchRes, confRes] = await Promise.all([
+        fetch('/api/benchmark?n=10'),
+        fetch('/api/confusion-matrix?n=8'),
+      ]);
+      if (!benchRes.ok || !confRes.ok) throw new Error('Server returned an error');
+      const [bData, cData] = await Promise.all([benchRes.json(), confRes.json()]);
+      setBenchmarkData(bData);
+      setConfusionData(cData);
+      const now = new Date();
+      setLastRunTime(
+        now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) +
+        ' · ' +
+        now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      );
+    } catch (e) {
+      setEvalError(e.message || 'Evaluation failed');
+    } finally {
+      setBenchmarkLoading(false);
     }
   };
 
@@ -1119,6 +1233,12 @@ function App() {
                     {result && !loading && !filterLoading && !showDifference && (
                       <div className="image-stage" onMouseMove={handleViewerPointerMove}>
                         {activeFilterId && (
+                          <>
+                            <span className="viewer-split-label viewer-split-label--left">Restored image</span>
+                            <span className="viewer-split-label viewer-split-label--right">Noisy image</span>
+                          </>
+                        )}
+                        {activeFilterId && (
                           <div
                             className={`split-marker ${isDraggingSplit ? 'is-dragging' : ''}`}
                             style={{ left: `${splitMarkerPosition}%` }}
@@ -1274,98 +1394,240 @@ function App() {
                 <section className="panel results-panel">
                   <div className="panel-header">Results</div>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Quantitative evaluation metrics comparing all pipeline filters.
+                    Quantitative evaluation metrics comparing all pipeline filters. <strong>Auto ★</strong> = system-selected method; <span style={{ color: 'var(--accent-yellow)' }}>★</span> = best value in that column.
                   </p>
-                  <div className="results-table-wrapper">
-                    <table className="results-table">
+                  {(() => {
+                    const loaded = (result?.filter_metrics || []).filter(f => f.brisque !== null && f.brisque !== undefined);
+                    const loadedNiqe = loaded.filter(f => f.niqe !== null && f.niqe !== undefined);
+                    const loadedTime = loaded.filter(f => f.runtime_ms !== null && f.runtime_ms !== undefined);
+                    const loadedEdge = loaded.filter(f => f.edge_preservation !== null && f.edge_preservation !== undefined);
+                    const loadedSharp = loaded.filter(f => f.laplacian_var !== null && f.laplacian_var !== undefined);
+                    const bestBrisqueId = loaded.length ? loaded.reduce((a, b) => a.brisque < b.brisque ? a : b).id : null;
+                    const bestNiqeId = loadedNiqe.length ? loadedNiqe.reduce((a, b) => a.niqe < b.niqe ? a : b).id : null;
+                    const fastestId = loadedTime.length ? loadedTime.reduce((a, b) => a.runtime_ms < b.runtime_ms ? a : b).id : null;
+                    const bestEdgeId = loadedEdge.length ? loadedEdge.reduce((a, b) => a.edge_preservation > b.edge_preservation ? a : b).id : null;
+                    const bestSharpId = loadedSharp.length ? loadedSharp.reduce((a, b) => a.laplacian_var > b.laplacian_var ? a : b).id : null;
+                    const autoFilterId = result?.analysis?.best_filter_id;
+                    return (
+                      <div className="results-table-wrapper">
+                        <table className="results-table">
+                          <thead>
+                            <tr>
+                              <th>Filter Method</th>
+                              <th className="tooltip-trigger" tabIndex={0}>
+                                Execution Time
+                                <span className="tooltip-content">Time in milliseconds to apply the filter. Lower is faster.</span>
+                              </th>
+                              <th className="tooltip-trigger" tabIndex={0}>
+                                Edge Preservation Ratio
+                                <span className="tooltip-content">Correlation of image edge maps before and after filtering. 1.0 is perfect preservation.</span>
+                              </th>
+                              <th className="tooltip-trigger" tabIndex={0}>
+                                Variance of Laplacian (Sharpness)
+                                <span className="tooltip-content">High-frequency detail variance of the restored image. Higher values represent a sharper image.</span>
+                              </th>
+                              <th className="tooltip-trigger" tabIndex={0}>
+                                BRISQUE
+                                <span className="tooltip-content">Blind/Referenceless Image Spatial Quality Evaluator (0 to 100). Lower is better quality.</span>
+                              </th>
+                              <th className="tooltip-trigger" tabIndex={0}>
+                                NIQE
+                                <span className="tooltip-content">Naturalness Image Quality Evaluator. Measures distance to natural image statistics. Lower is better.</span>
+                              </th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(result?.filter_metrics || []).map((filter) => {
+                              const isActive = filter.id === activeFilterId;
+                              const isAutoSelected = filter.id === autoFilterId;
+                              return (
+                                <tr
+                                  key={filter.id}
+                                  className={isActive ? 'row-selected' : ''}
+                                  onClick={() => handleFilterSwitch(filter.id)}
+                                  title={isActive ? 'Currently active filter' : `Apply ${filter.name}`}
+                                >
+                                  <td style={{ fontWeight: isActive ? '600' : 'normal' }}>
+                                    {filter.name}
+                                  </td>
+                                  <td className="metric-value-mono">
+                                    {filter.runtime_ms !== null && filter.runtime_ms !== undefined ? (
+                                      <>{filter.runtime_ms} ms{filter.id === fastestId && <span className="metric-best-star" title="Fastest">★</span>}</>
+                                    ) : '—'}
+                                  </td>
+                                  <td className="metric-value-mono">
+                                    {filter.edge_preservation !== null && filter.edge_preservation !== undefined ? (
+                                      <>{filter.edge_preservation.toFixed(4)}{filter.id === bestEdgeId && <span className="metric-best-star" title="Best edge preservation">★</span>}</>
+                                    ) : '—'}
+                                  </td>
+                                  <td className="metric-value-mono">
+                                    {filter.laplacian_var !== null && filter.laplacian_var !== undefined ? (
+                                      <>{filter.laplacian_var.toFixed(1)}%{filter.id === bestSharpId && <span className="metric-best-star" title="Sharpest output">★</span>}</>
+                                    ) : '—'}
+                                  </td>
+                                  <td className="metric-value-mono">
+                                    {filter.brisque !== null && filter.brisque !== undefined ? (
+                                      <>{filter.brisque.toFixed(2)}{filter.id === bestBrisqueId && <span className="metric-best-star" title="Best BRISQUE">★</span>}</>
+                                    ) : '—'}
+                                  </td>
+                                  <td className="metric-value-mono">
+                                    {filter.niqe !== null && filter.niqe !== undefined ? (
+                                      <>{filter.niqe.toFixed(2)}{filter.id === bestNiqeId && <span className="metric-best-star" title="Best NIQE">★</span>}</>
+                                    ) : '—'}
+                                  </td>
+                                  <td>
+                                    {isActive ? (
+                                      result?.images?.all_cleaned?.[filter.id] ? (
+                                        isAutoSelected
+                                          ? <span className="row-auto-badge">Auto ★</span>
+                                          : <span className="row-selected-badge">Active</span>
+                                      ) : (
+                                        <span className="row-caching-badge">Caching...</span>
+                                      )
+                                    ) : backgroundLoadingIds.includes(filter.id) ? (
+                                      <span className="row-caching-badge">Caching...</span>
+                                    ) : backgroundQueue.includes(filter.id) ? (
+                                      <span className="row-queued-badge">Queued</span>
+                                    ) : (
+                                      <span className="row-apply-badge">Apply</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <p className="results-table-note">
+                          The auto-selected method is chosen by <strong>noise type</strong>, not by table metrics alone. For Gaussian noise the CNN is preferred: NLM often scores better on BRISQUE/NIQE through exhaustive patch averaging, but its O(N²) complexity makes it ~2× slower than a single CNN forward pass. For Salt &amp; Pepper noise the Median filter is preferred: it replaces each pixel with its neighbourhood median, which provably eliminates isolated impulse pixels — other filters may score higher on individual metrics by over-smoothing the image, but leave residual impulse noise visible. BRISQUE and NIQE measure statistical naturalness of the output in isolation; they do not measure how much noise was actually removed relative to the original.
+                        </p>
+                      </div>
+                    );
+                  })()}
+                </section>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* experimental evaluation */}
+        <div className="eval-section">
+          <div className={`eval-main-row${!benchmarkData && !benchmarkLoading ? ' eval-main-row--no-tables' : ''}`}>
+
+            <div className="eval-left-col">
+              {/* narrow control panel */}
+              <div className="panel eval-control-panel">
+                <div className="panel-header">Evaluation</div>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 16 }}>
+                  Benchmarks all five filters on {benchmarkData?.n_images ?? 10} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
+                </p>
+                {evalError && <div className="upload-error-msg">{evalError}</div>}
+                <button className="action-btn eval-dash-run-btn" onClick={handleRunEvaluation} disabled={benchmarkLoading}>
+                  {benchmarkLoading
+                    ? <><div className="eval-btn-spinner" />Running…</>
+                    : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 11, height: 11, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
+                  }
+                </button>
+                <p className="eval-dash-run-note">∼2–3 min · 10 images · 8 noise levels</p>
+
+                {benchmarkData && (() => {
+                  const getBest = (levels) => {
+                    if (!levels?.length) return null;
+                    const fids = Object.keys(levels[0]?.results || {});
+                    const avgP = {};
+                    fids.forEach(f => {
+                      const vals = levels.map(l => l.results[f]?.psnr).filter(v => v != null);
+                      avgP[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+                    });
+                    return fids.reduce((b, f) => (avgP[f] ?? -Infinity) > (avgP[b] ?? -Infinity) ? f : b, fids[0]);
+                  };
+                  const gBest = getBest(benchmarkData.gaussian);
+                  const sBest = getBest(benchmarkData.salt_pepper);
+                  return (
+                    <div className="eval-ctrl-results">
+                      <div className="eval-ctrl-row">
+                        <span className="eval-ctrl-label">Best for Gaussian</span>
+                        {gBest && <span className="eval-best-filter-badge" style={{ background: FILTER_COLORS[gBest] + '22', color: FILTER_COLORS[gBest], borderColor: FILTER_COLORS[gBest] + '55' }}>{SHORT_NAME(benchmarkData.filter_names?.[gBest])}</span>}
+                      </div>
+                      <div className="eval-ctrl-row">
+                        <span className="eval-ctrl-label">Best for S&amp;P</span>
+                        {sBest && <span className="eval-best-filter-badge" style={{ background: FILTER_COLORS[sBest] + '22', color: FILTER_COLORS[sBest], borderColor: FILTER_COLORS[sBest] + '55' }}>{SHORT_NAME(benchmarkData.filter_names?.[sBest])}</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* confusion matrix — compact, stacked below control panel */}
+              {confusionData && (
+                <div className="panel">
+                  <div className="panel-header">Noise Detector Accuracy</div>
+                  <div className="confusion-matrix-wrapper">
+                    <table className="confusion-table">
                       <thead>
                         <tr>
-                          <th>Filter Method</th>
-                          <th className="tooltip-trigger" tabIndex={0}>
-                            Execution Time
-                            <span className="tooltip-content">Time in milliseconds to apply the filter. Lower is faster.</span>
-                          </th>
-                          <th className="tooltip-trigger" tabIndex={0}>
-                            Edge Preservation Ratio
-                            <span className="tooltip-content">Correlation of image edge maps before and after filtering. 1.0 is perfect preservation.</span>
-                          </th>
-                          <th className="tooltip-trigger" tabIndex={0}>
-                            Variance of Laplacian (Sharpness)
-                            <span className="tooltip-content">High-frequency detail variance of the restored image. Higher values represent a sharper image.</span>
-                          </th>
-                          <th className="tooltip-trigger" tabIndex={0}>
-                            BRISQUE
-                            <span className="tooltip-content">Blind/Referenceless Image Spatial Quality Evaluator (0 to 100). Lower is better quality.</span>
-                          </th>
-                          <th className="tooltip-trigger" tabIndex={0}>
-                            NIQE
-                            <span className="tooltip-content">Naturalness Image Quality Evaluator. Measures distance to natural image statistics. Lower is better.</span>
-                          </th>
-                          <th>Status</th>
+                          <th className="confusion-axis">↓ / →</th>
+                          {confusionData.classes.map(cls => (
+                            <th key={cls}>{cls === 'salt_and_pepper' ? 'S&P' : cls === 'gaussian' ? 'Gauss.' : 'Clean'}</th>
+                          ))}
+                          <th>Recall</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {(result?.filter_metrics || []).map((filter) => {
-                          const isActive = filter.id === activeFilterId;
+                        {confusionData.classes.map(actual => {
+                          const rowTotal = confusionData.total_per_class[actual];
+                          const recall = rowTotal > 0 ? ((confusionData.matrix[actual][actual] / rowTotal) * 100).toFixed(1) : '—';
                           return (
-                            <tr
-                              key={filter.id}
-                              className={isActive ? 'row-selected' : ''}
-                              onClick={() => handleFilterSwitch(filter.id)}
-                              title={isActive ? 'Currently active filter' : `Apply ${filter.name}`}
-                            >
-                              <td style={{ fontWeight: isActive ? '600' : 'normal' }}>
-                                {filter.name}
-                              </td>
-                              <td className="metric-value-mono">
-                                {filter.runtime_ms !== null && filter.runtime_ms !== undefined
-                                  ? `${filter.runtime_ms} ms`
-                                  : '—'}
-                              </td>
-                              <td className="metric-value-mono">
-                                {filter.edge_preservation !== null && filter.edge_preservation !== undefined
-                                  ? filter.edge_preservation.toFixed(4)
-                                  : '—'}
-                              </td>
-                              <td className="metric-value-mono">
-                                {filter.laplacian_var !== null && filter.laplacian_var !== undefined
-                                  ? `${filter.laplacian_var.toFixed(1)}%`
-                                  : '—'}
-                              </td>
-                              <td className="metric-value-mono">
-                                {filter.brisque !== null && filter.brisque !== undefined
-                                  ? filter.brisque.toFixed(2)
-                                  : '—'}
-                              </td>
-                              <td className="metric-value-mono">
-                                {filter.niqe !== null && filter.niqe !== undefined
-                                  ? filter.niqe.toFixed(2)
-                                  : '—'}
-                              </td>
-                              <td>
-                                {isActive ? (
-                                  result?.images?.all_cleaned?.[filter.id] ? (
-                                    <span className="row-selected-badge">Active</span>
-                                  ) : (
-                                    <span className="row-caching-badge">Caching...</span>
-                                  )
-                                ) : backgroundLoadingIds.includes(filter.id) ? (
-                                  <span className="row-caching-badge">Caching...</span>
-                                ) : backgroundQueue.includes(filter.id) ? (
-                                  <span className="row-queued-badge">Queued</span>
-                                ) : (
-                                  <span className="row-apply-badge">Apply</span>
-                                )}
-                              </td>
+                            <tr key={actual}>
+                              <td className="confusion-row-label">{actual === 'salt_and_pepper' ? 'S&P' : actual === 'gaussian' ? 'Gauss.' : 'Clean'}</td>
+                              {confusionData.classes.map(pred => {
+                                const count = confusionData.matrix[actual][pred];
+                                const pct = rowTotal > 0 ? Math.round((count / rowTotal) * 100) : 0;
+                                return (
+                                  <td key={pred} className={`confusion-cell ${actual === pred ? 'confusion-cell--correct' : count > 0 ? 'confusion-cell--wrong' : 'confusion-cell--zero'}`}>
+                                    <span className="confusion-count">{count}</span>
+                                    <span className="confusion-pct">{pct}%</span>
+                                  </td>
+                                );
+                              })}
+                              <td className="confusion-recall">{recall}%</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                   </div>
-                </section>
+                  <p className="bench-note" style={{ marginTop: 8 }}>Rows = actual noise · Columns = predicted · Diagonal = correct</p>
+                </div>
+              )}
+            </div>
+
+            {/* two result table panels — only rendered after evaluation runs */}
+            {(benchmarkData || benchmarkLoading) && (
+              <div className="eval-tables-row">
+                <div className="panel">
+                  <div className="panel-header">Gaussian Noise</div>
+                  {benchmarkLoading && (
+                    <div className="eval-dash-empty" style={{ minHeight: 100 }}>
+                      <div className="analysis-scanner-box" style={{ width: 56, height: 7 }}><div className="analysis-scanner-line" /></div>
+                      <p>Computing…</p>
+                    </div>
+                  )}
+                  {benchmarkData && <BenchTable data={benchmarkData.gaussian} filterNames={benchmarkData.filter_names} />}
+                </div>
+                <div className="panel">
+                  <div className="panel-header">Salt &amp; Pepper Noise</div>
+                  {benchmarkLoading && (
+                    <div className="eval-dash-empty" style={{ minHeight: 100 }}>
+                      <div className="analysis-scanner-box" style={{ width: 56, height: 7 }}><div className="analysis-scanner-line" /></div>
+                      <p>Computing…</p>
+                    </div>
+                  )}
+                  {benchmarkData && <BenchTable data={benchmarkData.salt_pepper} filterNames={benchmarkData.filter_names} />}
+                </div>
               </div>
             )}
+
           </div>
         </div>
       </div>
