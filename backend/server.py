@@ -314,8 +314,11 @@ def _load_dataset_images(n, max_dim):
         files.extend(_glob.glob(os.path.join(DATASET_DIR, pat)))
     if not files:
         return []
+    files.sort()
+    rng = _random.Random(42)
+    selected_files = rng.sample(files, min(n, len(files)))
     imgs = []
-    for path in _random.sample(files, min(n, len(files))):
+    for path in selected_files:
         img = cv2.imread(path)
         if img is None:
             continue
@@ -592,7 +595,7 @@ def run_benchmark(n: int = Query(default=10, description="Number of dataset imag
 
 
 @app.get("/api/confusion-matrix")
-def run_confusion_matrix(n: int = Query(default=8, description="Number of source images")):
+def run_confusion_matrix(n: int = Query(default=10, description="Number of source images")):
     try:
         files = []
         for pat in ["*.png", "*.jpg", "*.JPG", "*.jpeg", "*.PNG", "*.JPEG"]:
@@ -600,7 +603,9 @@ def run_confusion_matrix(n: int = Query(default=8, description="Number of source
         if not files:
             return JSONResponse(status_code=404, content={"error": "No dataset images found in dataset/"})
 
-        selected = _random.sample(files, min(n, len(files)))
+        files.sort()
+        rng = _random.Random(42)
+        selected = rng.sample(files, min(n, len(files)))
         classes = ["gaussian", "salt_and_pepper", "none"]
         matrix = {actual: {pred: 0 for pred in classes} for actual in classes}
         total  = {cls: 0 for cls in classes}

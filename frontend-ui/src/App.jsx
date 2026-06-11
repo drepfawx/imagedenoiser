@@ -32,7 +32,7 @@ function MagnifierIcon() {
 
 function SuccessShieldIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '20px', height: '20px', color: 'var(--accent-green)' }}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '16px', height: '16px', color: 'var(--accent-green)' }}>
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="m9 11 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
@@ -41,7 +41,7 @@ function SuccessShieldIcon() {
 
 function GaussianWavesIcon() {
   return (
-    <svg className="animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '20px', height: '20px', color: 'var(--accent-blue)' }}>
+    <svg className="animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '16px', height: '16px', color: 'var(--accent-blue)' }}>
       <path d="M2 10s3-4 6-4 4 8 8 8 6-4 6-4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M2 14s3-4 6-4 4 8 8 8 6-4 6-4" opacity="0.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
@@ -50,7 +50,7 @@ function GaussianWavesIcon() {
 
 function SpecklesIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '20px', height: '20px', color: 'var(--accent-yellow)' }}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '16px', height: '16px', color: 'var(--accent-yellow)' }}>
       <circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" />
       <circle cx="16" cy="14" r="1.2" fill="currentColor" stroke="none" />
       <circle cx="7" cy="16" r="1" fill="currentColor" stroke="none" />
@@ -88,76 +88,374 @@ const FILTER_COLORS = {
   cnn: '#8b5cf6',
 };
 
+const FIXED_FILTER_ORDER = ['gaussian', 'median', 'bilateral', 'nlm', 'cnn'];
+
 const SHORT_NAME = (full = '') =>
   full.replace(' Filter', '').replace(' Denoiser', '')
     .replace('Non-Local Means (NLM)', 'NLM').replace('PyTorch CNN', 'CNN');
 
 const fmtMs = ms => ms == null ? '—' : ms < 1 ? ms.toFixed(3) : ms < 10 ? ms.toFixed(1) : String(Math.round(ms));
 
-function BenchTable({ data, filterNames }) {
-  if (!data?.length) return null;
-  const fids = Object.keys(data[0]?.results || {});
+const getBestFilter = (levels, metric) => {
+  if (!levels?.length) return null;
+  const fids = Object.keys(levels[0]?.results || {});
+  const avgP = {};
+  fids.forEach(f => {
+    const vals = levels.map(l => l.results[f]?.[metric]).filter(v => v != null);
+    avgP[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  });
+
+  return fids.reduce((b, f) => {
+    if (avgP[f] == null) return b;
+    if (avgP[b] == null) return f;
+    if (metric === 'time_ms') {
+      return avgP[f] < avgP[b] ? f : b; // Lower is better
+    } else {
+      return avgP[f] > avgP[b] ? f : b; // Higher is better
+    }
+  }, fids[0]);
+};
+
+const getBestFilterByUtility = (levels) => {
+  if (!levels?.length) return null;
+  const fids = Object.keys(levels[0]?.results || {});
   if (!fids.length) return null;
 
-  const avgOf = (fid, key) => {
-    const vals = data.map(l => l.results[fid]?.[key]).filter(v => v != null);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  const avgPSNR = {};
+  const avgSSIM = {};
+  const avgTime = {};
+
+  fids.forEach(fid => {
+    const psnrs = levels.map(l => l.results[fid]?.psnr).filter(v => v != null);
+    const ssims = levels.map(l => l.results[fid]?.ssim).filter(v => v != null);
+    const times = levels.map(l => l.results[fid]?.time_ms).filter(v => v != null);
+
+    avgPSNR[fid] = psnrs.length ? psnrs.reduce((a, b) => a + b, 0) / psnrs.length : 0;
+    avgSSIM[fid] = ssims.length ? ssims.reduce((a, b) => a + b, 0) / ssims.length : 0;
+    avgTime[fid] = times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
+  });
+
+  const psnrsList = Object.values(avgPSNR);
+  const ssimsList = Object.values(avgSSIM);
+  const timesList = Object.values(avgTime);
+
+  const minP = Math.min(...psnrsList);
+  const maxP = Math.max(...psnrsList);
+  const minS = Math.min(...ssimsList);
+  const maxS = Math.max(...ssimsList);
+  const minT = Math.min(...timesList);
+  const maxT = Math.max(...timesList);
+
+  let bestFid = fids[0];
+  let maxUtility = -Infinity;
+
+  fids.forEach(fid => {
+    const normP = maxP > minP ? (avgPSNR[fid] - minP) / (maxP - minP) : 1.0;
+    const normS = maxS > minS ? (avgSSIM[fid] - minS) / (maxS - minS) : 1.0;
+    const normT = maxT > minT ? (maxT - avgTime[fid]) / (maxT - minT) : 1.0;
+
+    const utility = 0.4 * normP + 0.4 * normS + 0.2 * normT;
+
+    if (utility > maxUtility) {
+      maxUtility = utility;
+      bestFid = fid;
+    }
+  });
+
+  return bestFid;
+};
+
+const getBestAvgValue = (levels, fid, metric) => {
+  if (!levels?.length || !fid) return null;
+  const vals = levels.map(l => l.results[fid]?.[metric]).filter(v => v != null);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+
+const getAvgAll = (levels, metric) => {
+  if (!levels?.length) return null;
+  const fids = Object.keys(levels[0]?.results || {});
+  const vals = [];
+  levels.forEach(lvl => {
+    fids.forEach(fid => {
+      const val = lvl.results[fid]?.[metric];
+      if (val != null) vals.push(val);
+    });
+  });
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+
+function BenchChart({ data, filterNames, metric }) {
+  if (!data?.length) return null;
+  const allFids = Object.keys(data[0]?.results || {});
+  if (!allFids.length) return null;
+
+  const fids = [
+    ...FIXED_FILTER_ORDER.filter(fid => allFids.includes(fid)),
+    ...allFids.filter(fid => !FIXED_FILTER_ORDER.includes(fid))
+  ];
+
+  const width = 480;
+  const height = 350;
+  const paddingLeft = 25;
+  const paddingRight = 15;
+  const paddingTop = 30;
+  const paddingBottom = 15;
+
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+
+  const allValues = [];
+  data.forEach(lvl => {
+    fids.forEach(fid => {
+      const v = lvl.results[fid]?.[metric];
+      if (v != null) allValues.push(v);
+    });
+  });
+
+  let minVal = Math.min(...allValues);
+  let maxVal = Math.max(...allValues);
+
+  if (allValues.length === 0) {
+    minVal = 0;
+    maxVal = 100;
+  } else if (minVal === maxVal) {
+    minVal = minVal * 0.9;
+    maxVal = maxVal * 1.1;
+  } else {
+    const range = maxVal - minVal;
+    if (metric === 'time_ms') {
+      minVal = 0;
+      maxVal = maxVal + range * 0.15;
+    } else if (metric === 'ssim') {
+      minVal = Math.max(0.0, minVal - range * 0.15);
+      maxVal = Math.min(1.0, maxVal + range * 0.15);
+    } else {
+      minVal = Math.max(0.0, minVal - range * 0.15);
+      maxVal = maxVal + range * 0.15;
+    }
+  }
+
+  const ticksCount = 5;
+  const yTicks = [];
+  for (let i = 0; i < ticksCount; i++) {
+    yTicks.push(minVal + (i * (maxVal - minVal)) / (ticksCount - 1));
+  }
+
+  const getX = (index) => {
+    return paddingLeft + (index / (data.length - 1)) * chartWidth;
   };
-  const bestPerLevel = data.map(lvl =>
-    fids.reduce((b, f) => (lvl.results[f]?.psnr ?? -Infinity) > (lvl.results[b]?.psnr ?? -Infinity) ? f : b, fids[0])
-  );
-  const fastestPerLevel = data.map(lvl =>
-    fids.reduce((b, f) => {
-      const tb = lvl.results[b]?.time_ms, tf = lvl.results[f]?.time_ms;
-      return (tf != null && (tb == null || tf < tb)) ? f : b;
-    }, fids[0])
-  );
-  const bestAvg = fids.reduce((b, f) => (avgOf(f, 'psnr') ?? -Infinity) > (avgOf(b, 'psnr') ?? -Infinity) ? f : b, fids[0]);
-  const fastestAvg = fids.reduce((b, f) => {
-    const tb = avgOf(b, 'time_ms'), tf = avgOf(f, 'time_ms');
-    return (tf != null && (tb == null || tf < tb)) ? f : b;
-  }, fids[0]);
+
+  const getY = (val) => {
+    if (val == null) return paddingTop + chartHeight;
+    const ratio = (val - minVal) / (maxVal - minVal);
+    return paddingTop + chartHeight - ratio * chartHeight;
+  };
 
   return (
-    <>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <svg viewBox={`0 0 ${width} ${height}`} className="bench-chart-svg" preserveAspectRatio="xMidYMid meet">
+          {yTicks.map((tick, i) => {
+            const y = getY(tick);
+            return (
+              <g key={`grid-${i}`}>
+                <line
+                  x1={paddingLeft}
+                  y1={y}
+                  x2={width - paddingRight}
+                  y2={y}
+                  className="bench-chart-grid-line"
+                />
+                <text
+                  x={paddingLeft - 8}
+                  y={y + 3}
+                  textAnchor="end"
+                  className="bench-chart-text"
+                >
+                  {metric === 'ssim' ? tick.toFixed(2) : Math.round(tick)}
+                </text>
+              </g>
+            );
+          })}
+
+          {data.map((lvl, index) => {
+            const x = getX(index);
+            return (
+              <text
+                key={`label-x-${index}`}
+                x={x}
+                y={height - paddingBottom + 16}
+                textAnchor="middle"
+                className="bench-chart-text"
+              >
+                {lvl.label}
+              </text>
+            );
+          })}
+
+          {fids.map(fid => {
+            const points = data.map((lvl, index) => {
+              const val = lvl.results[fid]?.[metric];
+              return val != null ? `${getX(index)},${getY(val)}` : null;
+            }).filter(p => p != null).join(' ');
+
+            return (
+              <polyline
+                key={`line-${fid}`}
+                points={points}
+                className="bench-chart-line"
+                style={{ stroke: FILTER_COLORS[fid] }}
+              />
+            );
+          })}
+
+          {fids.map(fid =>
+            data.map((lvl, index) => {
+              const val = lvl.results[fid]?.[metric];
+              if (val == null) return null;
+              const cx = getX(index);
+              const cy = getY(val);
+              return (
+                <g key={`dot-${fid}-${index}`}>
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={3.5}
+                    className="bench-chart-dot-bg"
+                  />
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={3}
+                    className="bench-chart-dot"
+                    style={{ stroke: FILTER_COLORS[fid], fill: FILTER_COLORS[fid] }}
+                  >
+                    <title>{`${SHORT_NAME(filterNames?.[fid])}: ${val.toFixed(metric === 'ssim' ? 3 : 1)}${metric === 'time_ms' ? 'ms' : metric === 'psnr' ? ' dB' : ''}`}</title>
+                  </circle>
+                </g>
+              );
+            })
+          )}
+
+          <line
+            x1={paddingLeft}
+            y1={paddingTop}
+            x2={paddingLeft}
+            y2={height - paddingBottom}
+            className="bench-chart-axis-line"
+          />
+          <line
+            x1={paddingLeft}
+            y1={height - paddingBottom}
+            x2={width - paddingRight}
+            y2={height - paddingBottom}
+            className="bench-chart-axis-line"
+          />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function BenchTable({ data, filterNames, metric }) {
+  if (!data?.length) return null;
+  const allFids = Object.keys(data[0]?.results || {});
+  if (!allFids.length) return null;
+
+  const fids = [
+    ...FIXED_FILTER_ORDER.filter(fid => allFids.includes(fid)),
+    ...allFids.filter(fid => !FIXED_FILTER_ORDER.includes(fid))
+  ];
+
+  // Calculate averages of the current metric for each filter
+  const avgOf = (fid) => {
+    const vals = data.map(l => l.results[fid]?.[metric]).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+
+  // Create list of filter rows with their average
+  const rows = fids.map(fid => {
+    const avg = avgOf(fid);
+    return {
+      fid,
+      avg,
+      name: SHORT_NAME(filterNames?.[fid])
+    };
+  });
+
+  // For each level, find the best filter value to highlight
+  const bestValuePerLevel = data.map((lvl, index) => {
+    let bestFid = null;
+    let bestVal = metric === 'time_ms' ? Infinity : -Infinity;
+
+    fids.forEach(fid => {
+      const val = lvl.results[fid]?.[metric];
+      if (val != null) {
+        if (metric === 'time_ms') {
+          if (val < bestVal) {
+            bestVal = val;
+            bestFid = fid;
+          }
+        } else {
+          if (val > bestVal) {
+            bestVal = val;
+            bestFid = fid;
+          }
+        }
+      }
+    });
+    return bestFid;
+  });
+
+  const formatValue = (val) => {
+    if (val == null) return '—';
+    if (metric === 'psnr') {
+      return `${val.toFixed(1)} dB`;
+    }
+    if (metric === 'ssim') {
+      return val.toFixed(3);
+    }
+    if (metric === 'time_ms') {
+      return `${fmtMs(val)}ms`;
+    }
+    return val;
+  };
+
+  return (
+    <div className="bench-table-wrapper">
       <table className="bench-table">
         <thead>
           <tr>
             <th>Filter</th>
             {data.map(l => <th key={l.label}>{l.label}</th>)}
-            <th>Avg</th>
           </tr>
         </thead>
         <tbody>
-          {fids.map(fid => (
-            <tr key={fid}>
-              <td className="bench-filter-cell">
-                <span className="eval-filter-dot" style={{ background: FILTER_COLORS[fid] }} />
-                {SHORT_NAME(filterNames?.[fid])}
-              </td>
-              {data.map((lvl, li) => {
-                const p = lvl.results[fid]?.psnr;
-                const s = lvl.results[fid]?.ssim;
-                const t = lvl.results[fid]?.time_ms;
-                return (
-                  <td key={lvl.label} className={`bench-cell${fid === bestPerLevel[li] ? ' bench-cell--best' : ''}`}>
-                    <span className="bench-psnr">{p != null ? p.toFixed(1) : '—'}</span>
-                    {s != null && <span className="bench-ssim">{s.toFixed(3)}</span>}
-                    {t != null && <span className={`bench-time${fid === fastestPerLevel[li] ? ' bench-time--fastest' : ''}`}>{fmtMs(t)}ms</span>}
-                  </td>
-                );
-              })}
-              <td className={`bench-cell${fid === bestAvg ? ' bench-cell--best-avg' : ''}`}>
-                <span className="bench-psnr">{avgOf(fid, 'psnr')?.toFixed(1) ?? '—'}</span>
-                {avgOf(fid, 'ssim') != null && <span className="bench-ssim">{avgOf(fid, 'ssim').toFixed(3)}</span>}
-                {avgOf(fid, 'time_ms') != null && <span className={`bench-time${fid === fastestAvg ? ' bench-time--fastest' : ''}`}>{fmtMs(avgOf(fid, 'time_ms'))}ms</span>}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const { fid } = row;
+            return (
+              <tr key={fid}>
+                <td className="bench-filter-cell">
+                  <span className="eval-filter-dot" style={{ background: FILTER_COLORS[fid] }} />
+                  {SHORT_NAME(filterNames?.[fid])}
+                </td>
+                {data.map((lvl, li) => {
+                  const val = lvl.results[fid]?.[metric];
+                  const isBest = fid === bestValuePerLevel[li];
+                  return (
+                    <td key={lvl.label} className={`bench-cell${isBest ? ' bench-cell--best' : ''}`}>
+                      <span className="bench-psnr">
+                        {formatValue(val)}
+                      </span>
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-      <p className="bench-note">PSNR (dB) · SSIM · ms · <span className="bench-note-green">green</span> = best PSNR · <span className="bench-note-blue">blue</span> = best avg · <span className="bench-note-purple">purple</span> = fastest</p>
-    </>
+    </div>
   );
 }
 
@@ -210,6 +508,7 @@ function App() {
 
   const [benchmarkData, setBenchmarkData] = useState(null);
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [activeMetricTab, setActiveMetricTab] = useState('psnr');
   const [confusionData, setConfusionData] = useState(null);
   const [evalError, setEvalError] = useState('');
   const [lastRunTime, setLastRunTime] = useState('');
@@ -644,7 +943,7 @@ function App() {
     try {
       const [benchRes, confRes] = await Promise.all([
         fetch('/api/benchmark?n=10'),
-        fetch('/api/confusion-matrix?n=8'),
+        fetch('/api/confusion-matrix?n=10'),
       ]);
       if (!benchRes.ok || !confRes.ok) throw new Error('Server returned an error');
       const [bData, cData] = await Promise.all([benchRes.json(), confRes.json()]);
@@ -980,9 +1279,11 @@ function App() {
                   {/* row 1: noise classification card */}
                   <div className="analysis-profile-card">
                     <div className="analysis-profile-header">
-                      {result.analysis.detected_noise === 'GAUSSIAN' && <GaussianWavesIcon />}
-                      {result.analysis.detected_noise === 'SALT_AND_PEPPER' && <SpecklesIcon />}
-                      {result.analysis.detected_noise === 'NONE' && <SuccessShieldIcon />}
+                      <div className="analysis-icon-wrap">
+                        {result.analysis.detected_noise === 'GAUSSIAN' && <GaussianWavesIcon />}
+                        {result.analysis.detected_noise === 'SALT_AND_PEPPER' && <SpecklesIcon />}
+                        {result.analysis.detected_noise === 'NONE' && <SuccessShieldIcon />}
+                      </div>
                       <div>
                         <h4>Noise Signature</h4>
                         <strong>
@@ -1041,11 +1342,13 @@ function App() {
                   {/* row 3: algorithm card */}
                   <div className="analysis-algorithm-card">
                     <div className="analysis-algorithm-header">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: '18px', height: '18px', color: 'var(--text-muted)' }}>
-                        <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M21 16V8a2 2 0 0 0-2-2h-5l-4-4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2Z" />
-                        <path d="m10 10 4 4m0-4-4 4" />
-                      </svg>
+                      <div className="analysis-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-muted)' }}>
+                          <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M21 16V8a2 2 0 0 0-2-2h-5l-4-4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2Z" />
+                          <path d="m10 10 4 4m0-4-4 4" />
+                        </svg>
+                      </div>
                       <div>
                         <h4>Selected Restoration Filter</h4>
                         <strong>
@@ -1393,8 +1696,8 @@ function App() {
 
                 <section className="panel results-panel">
                   <div className="panel-header">Results</div>
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Quantitative evaluation metrics comparing all pipeline filters. <strong>Auto ★</strong> = system-selected method; <span style={{ color: 'var(--accent-yellow)' }}>★</span> = best value in that column.
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.45, margin: '0 0 8px' }}>
+                    Quantitative evaluation metrics comparing all pipeline filters. Highlighted cells represent the best value in each column.
                   </p>
                   {(() => {
                     const loaded = (result?.filter_metrics || []).filter(f => f.brisque !== null && f.brisque !== undefined);
@@ -1451,36 +1754,26 @@ function App() {
                                   <td style={{ fontWeight: isActive ? '600' : 'normal' }}>
                                     {filter.name}
                                   </td>
-                                  <td className="metric-value-mono">
-                                    {filter.runtime_ms !== null && filter.runtime_ms !== undefined ? (
-                                      <>{filter.runtime_ms} ms{filter.id === fastestId && <span className="metric-best-star" title="Fastest">★</span>}</>
-                                    ) : '—'}
+                                  <td className={`metric-value-mono${filter.id === fastestId ? ' cell-best' : ''}`}>
+                                    {filter.runtime_ms !== null && filter.runtime_ms !== undefined ? `${filter.runtime_ms} ms` : '—'}
                                   </td>
-                                  <td className="metric-value-mono">
-                                    {filter.edge_preservation !== null && filter.edge_preservation !== undefined ? (
-                                      <>{filter.edge_preservation.toFixed(4)}{filter.id === bestEdgeId && <span className="metric-best-star" title="Best edge preservation">★</span>}</>
-                                    ) : '—'}
+                                  <td className={`metric-value-mono${filter.id === bestEdgeId ? ' cell-best' : ''}`}>
+                                    {filter.edge_preservation !== null && filter.edge_preservation !== undefined ? filter.edge_preservation.toFixed(4) : '—'}
                                   </td>
-                                  <td className="metric-value-mono">
-                                    {filter.laplacian_var !== null && filter.laplacian_var !== undefined ? (
-                                      <>{filter.laplacian_var.toFixed(1)}%{filter.id === bestSharpId && <span className="metric-best-star" title="Sharpest output">★</span>}</>
-                                    ) : '—'}
+                                  <td className={`metric-value-mono${filter.id === bestSharpId ? ' cell-best' : ''}`}>
+                                    {filter.laplacian_var !== null && filter.laplacian_var !== undefined ? `${filter.laplacian_var.toFixed(1)}%` : '—'}
                                   </td>
-                                  <td className="metric-value-mono">
-                                    {filter.brisque !== null && filter.brisque !== undefined ? (
-                                      <>{filter.brisque.toFixed(2)}{filter.id === bestBrisqueId && <span className="metric-best-star" title="Best BRISQUE">★</span>}</>
-                                    ) : '—'}
+                                  <td className={`metric-value-mono${filter.id === bestBrisqueId ? ' cell-best' : ''}`}>
+                                    {filter.brisque !== null && filter.brisque !== undefined ? filter.brisque.toFixed(2) : '—'}
                                   </td>
-                                  <td className="metric-value-mono">
-                                    {filter.niqe !== null && filter.niqe !== undefined ? (
-                                      <>{filter.niqe.toFixed(2)}{filter.id === bestNiqeId && <span className="metric-best-star" title="Best NIQE">★</span>}</>
-                                    ) : '—'}
+                                  <td className={`metric-value-mono${filter.id === bestNiqeId ? ' cell-best' : ''}`}>
+                                    {filter.niqe !== null && filter.niqe !== undefined ? filter.niqe.toFixed(2) : '—'}
                                   </td>
                                   <td>
                                     {isActive ? (
                                       result?.images?.all_cleaned?.[filter.id] ? (
                                         isAutoSelected
-                                          ? <span className="row-auto-badge">Auto ★</span>
+                                          ? <span className="row-auto-badge">Auto</span>
                                           : <span className="row-selected-badge">Active</span>
                                       ) : (
                                         <span className="row-caching-badge">Caching...</span>
@@ -1498,9 +1791,6 @@ function App() {
                             })}
                           </tbody>
                         </table>
-                        <p className="results-table-note">
-                          The auto-selected method is chosen by <strong>noise type</strong>, not by table metrics alone. For Gaussian noise the CNN is preferred: NLM often scores better on BRISQUE/NIQE through exhaustive patch averaging, but its O(N²) complexity makes it ~2× slower than a single CNN forward pass. For Salt &amp; Pepper noise the Median filter is preferred: it replaces each pixel with its neighbourhood median, which provably eliminates isolated impulse pixels — other filters may score higher on individual metrics by over-smoothing the image, but leave residual impulse noise visible. BRISQUE and NIQE measure statistical naturalness of the output in isolation; they do not measure how much noise was actually removed relative to the original.
-                        </p>
                       </div>
                     );
                   })()}
@@ -1516,115 +1806,283 @@ function App() {
 
             <div className="eval-left-col">
               {/* narrow control panel */}
-              <div className="panel eval-control-panel">
-                <div className="panel-header">Evaluation</div>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 16 }}>
-                  Benchmarks all five filters on {benchmarkData?.n_images ?? 10} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
-                </p>
-                {evalError && <div className="upload-error-msg">{evalError}</div>}
-                <button className="action-btn eval-dash-run-btn" onClick={handleRunEvaluation} disabled={benchmarkLoading}>
-                  {benchmarkLoading
-                    ? <><div className="eval-btn-spinner" />Running…</>
-                    : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 11, height: 11, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
-                  }
-                </button>
-                <p className="eval-dash-run-note">∼2–3 min · 10 images · 8 noise levels</p>
+              <div className="panel eval-control-panel" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="panel-header">
+                  <span>Experimental Evaluation</span>
+                  {benchmarkData && (
+                    <span className="analysis-status-badge analysis-status-badge--none">Active</span>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                    Benchmarks all five filters on {benchmarkData?.n_images ?? 10} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
+                  </p>
+                  {evalError && <div className="upload-error-msg">{evalError}</div>}
+                  <button className="action-btn eval-dash-run-btn" onClick={handleRunEvaluation} disabled={benchmarkLoading} style={{ width: '100%' }}>
+                    {benchmarkLoading
+                      ? <><div className="eval-btn-spinner" />Running…</>
+                      : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 11, height: 11, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
+                    }
+                  </button>
+                  <p className="eval-dash-run-note" style={{ marginTop: '0', textAlign: 'center' }}>∼2–3 min · 10 images · 8 noise levels</p>
+                </div>
 
                 {benchmarkData && (() => {
-                  const getBest = (levels) => {
-                    if (!levels?.length) return null;
-                    const fids = Object.keys(levels[0]?.results || {});
-                    const avgP = {};
-                    fids.forEach(f => {
-                      const vals = levels.map(l => l.results[f]?.psnr).filter(v => v != null);
-                      avgP[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-                    });
-                    return fids.reduce((b, f) => (avgP[f] ?? -Infinity) > (avgP[b] ?? -Infinity) ? f : b, fids[0]);
-                  };
-                  const gBest = getBest(benchmarkData.gaussian);
-                  const sBest = getBest(benchmarkData.salt_pepper);
+                  const gBest = getBestFilterByUtility(benchmarkData.gaussian);
+                  const sBest = getBestFilterByUtility(benchmarkData.salt_pepper);
+
                   return (
-                    <div className="eval-ctrl-results">
-                      <div className="eval-ctrl-row">
-                        <span className="eval-ctrl-label">Best for Gaussian</span>
-                        {gBest && <span className="eval-best-filter-badge" style={{ background: FILTER_COLORS[gBest] + '22', color: FILTER_COLORS[gBest], borderColor: FILTER_COLORS[gBest] + '55' }}>{SHORT_NAME(benchmarkData.filter_names?.[gBest])}</span>}
+                    <div className="eval-top-performers" style={{ paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+                      <div className="eval-performer-row">
+                        <div className="eval-performer-info">
+                          <div className="eval-performer-icon-wrap" style={{ color: 'var(--accent-blue)' }}>
+                            <GaussianWavesIcon />
+                          </div>
+                          <div className="eval-performer-text">
+                            <h5>Gaussian Noise</h5>
+                            <strong>{gBest ? SHORT_NAME(benchmarkData.filter_names?.[gBest]) : 'None'}</strong>
+                          </div>
+                        </div>
+                        {gBest && (
+                          <span
+                            className="eval-performer-badge tooltip-trigger"
+                            tabIndex={0}
+                            style={{
+                              background: FILTER_COLORS[gBest] + '15',
+                              color: FILTER_COLORS[gBest],
+                              borderColor: FILTER_COLORS[gBest] + '33',
+                              cursor: 'help'
+                            }}
+                          >
+                            Top Performer
+                            <span className="tooltip-content" style={{ textAlign: 'left', minWidth: '150px' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--text-header)', display: 'block', marginBottom: '6px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Average Performance</span>
+                              PSNR: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.gaussian, gBest, 'psnr')?.toFixed(1)} dB</strong><br />
+                              SSIM: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.gaussian, gBest, 'ssim')?.toFixed(3)}</strong><br />
+                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{fmtMs(getBestAvgValue(benchmarkData.gaussian, gBest, 'time_ms'))}ms</strong>
+                            </span>
+                          </span>
+                        )}
                       </div>
-                      <div className="eval-ctrl-row">
-                        <span className="eval-ctrl-label">Best for S&amp;P</span>
-                        {sBest && <span className="eval-best-filter-badge" style={{ background: FILTER_COLORS[sBest] + '22', color: FILTER_COLORS[sBest], borderColor: FILTER_COLORS[sBest] + '55' }}>{SHORT_NAME(benchmarkData.filter_names?.[sBest])}</span>}
+
+                      <div className="eval-performer-row">
+                        <div className="eval-performer-info">
+                          <div className="eval-performer-icon-wrap" style={{ color: 'var(--accent-yellow)' }}>
+                            <SpecklesIcon />
+                          </div>
+                          <div className="eval-performer-text">
+                            <h5>Salt &amp; Pepper Noise</h5>
+                            <strong>{sBest ? SHORT_NAME(benchmarkData.filter_names?.[sBest]) : 'None'}</strong>
+                          </div>
+                        </div>
+                        {sBest && (
+                          <span
+                            className="eval-performer-badge tooltip-trigger"
+                            tabIndex={0}
+                            style={{
+                              background: FILTER_COLORS[sBest] + '15',
+                              color: FILTER_COLORS[sBest],
+                              borderColor: FILTER_COLORS[sBest] + '33',
+                              cursor: 'help'
+                            }}
+                          >
+                            Top Performer
+                            <span className="tooltip-content" style={{ textAlign: 'left', minWidth: '150px' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--text-header)', display: 'block', marginBottom: '6px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Average Performance</span>
+                              PSNR: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.salt_pepper, sBest, 'psnr')?.toFixed(1)} dB</strong><br />
+                              SSIM: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.salt_pepper, sBest, 'ssim')?.toFixed(3)}</strong><br />
+                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{fmtMs(getBestAvgValue(benchmarkData.salt_pepper, sBest, 'time_ms'))}ms</strong>
+                            </span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
                 })()}
-              </div>
 
-              {/* confusion matrix — compact, stacked below control panel */}
-              {confusionData && (
-                <div className="panel">
-                  <div className="panel-header">Noise Detector Accuracy</div>
-                  <div className="confusion-matrix-wrapper">
-                    <table className="confusion-table">
-                      <thead>
-                        <tr>
-                          <th className="confusion-axis">↓ / →</th>
-                          {confusionData.classes.map(cls => (
-                            <th key={cls}>{cls === 'salt_and_pepper' ? 'S&P' : cls === 'gaussian' ? 'Gauss.' : 'Clean'}</th>
-                          ))}
-                          <th>Recall</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {confusionData.classes.map(actual => {
-                          const rowTotal = confusionData.total_per_class[actual];
-                          const recall = rowTotal > 0 ? ((confusionData.matrix[actual][actual] / rowTotal) * 100).toFixed(1) : '—';
-                          return (
-                            <tr key={actual}>
-                              <td className="confusion-row-label">{actual === 'salt_and_pepper' ? 'S&P' : actual === 'gaussian' ? 'Gauss.' : 'Clean'}</td>
-                              {confusionData.classes.map(pred => {
-                                const count = confusionData.matrix[actual][pred];
-                                const pct = rowTotal > 0 ? Math.round((count / rowTotal) * 100) : 0;
-                                return (
-                                  <td key={pred} className={`confusion-cell ${actual === pred ? 'confusion-cell--correct' : count > 0 ? 'confusion-cell--wrong' : 'confusion-cell--zero'}`}>
-                                    <span className="confusion-count">{count}</span>
-                                    <span className="confusion-pct">{pct}%</span>
-                                  </td>
-                                );
-                              })}
-                              <td className="confusion-recall">{recall}%</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                {/* confusion matrix — compact, nested card inside panel */}
+                {confusionData && (
+                  <div className="analysis-profile-card" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div className="analysis-profile-header">
+                      <div className="analysis-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-muted)' }}>
+                          <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M21 16V8a2 2 0 0 0-2-2h-5l-4-4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z" />
+                          <path d="m10 10 4 4m0-4-4 4" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h4 style={{ margin: 0, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)' }}>Precision Map</h4>
+                        <strong style={{ fontSize: '13px', color: 'var(--text-header)' }}>Noise Detector Accuracy</strong>
+                      </div>
+                    </div>
+
+                    <div className="confusion-matrix-wrapper" style={{ marginTop: '5px' }}>
+                      <table className="confusion-table">
+                        <thead>
+                          <tr>
+                            <th className="confusion-axis">↓ / →</th>
+                            {confusionData.classes.map(cls => (
+                              <th key={cls}>{cls === 'salt_and_pepper' ? 'S&P' : cls === 'gaussian' ? 'Gauss.' : 'Clean'}</th>
+                            ))}
+                            <th>Recall</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {confusionData.classes.map(actual => {
+                            const rowTotal = confusionData.total_per_class[actual];
+                            const recall = rowTotal > 0 ? ((confusionData.matrix[actual][actual] / rowTotal) * 100).toFixed(1) : '—';
+                            return (
+                              <tr key={actual}>
+                                <td className="confusion-row-label">{actual === 'salt_and_pepper' ? 'S&P' : actual === 'gaussian' ? 'Gauss.' : 'Clean'}</td>
+                                {confusionData.classes.map(pred => {
+                                  const count = confusionData.matrix[actual][pred];
+                                  const pct = rowTotal > 0 ? Math.round((count / rowTotal) * 100) : 0;
+                                  return (
+                                    <td key={pred} className={`confusion-cell ${actual === pred ? 'confusion-cell--correct' : count > 0 ? 'confusion-cell--wrong' : 'confusion-cell--zero'}`}>
+                                      <span className="confusion-count">{count}</span>
+                                      <br />
+                                      <span className="confusion-pct">{pct}%</span>
+                                    </td>
+                                  );
+                                })}
+                                <td className="confusion-recall">{recall}%</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="bench-note" style={{ marginTop: '6px', fontSize: '11px', opacity: 0.75, margin: 0 }}>
+                      Rows = actual noise, columns = predictions. Highlighted diagonal cells show correct detections.
+                    </p>
                   </div>
-                  <p className="bench-note" style={{ marginTop: 8 }}>Rows = actual noise · Columns = predicted · Diagonal = correct</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
-            {/* two result table panels — only rendered after evaluation runs */}
+            {/* Right Column Dashboard — only rendered after evaluation runs or starts loading */}
             {(benchmarkData || benchmarkLoading) && (
-              <div className="eval-tables-row">
-                <div className="panel">
-                  <div className="panel-header">Gaussian Noise</div>
-                  {benchmarkLoading && (
-                    <div className="eval-dash-empty" style={{ minHeight: 100 }}>
-                      <div className="analysis-scanner-box" style={{ width: 56, height: 7 }}><div className="analysis-scanner-line" /></div>
-                      <p>Computing…</p>
+              <div className="panel eval-right-col" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                {/* Metric Switched Tab group & indicator badge */}
+                <div className="eval-card-header-bar eval-card-header-bar--main">
+                  <div className="eval-card-title-wrap">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ width: '16px', height: '16px', color: 'var(--accent-blue)' }}>
+                      <line x1="18" y1="20" x2="18" y2="10" strokeLinecap="round" />
+                      <line x1="12" y1="20" x2="12" y2="4" strokeLinecap="round" />
+                      <line x1="6" y1="20" x2="6" y2="14" strokeLinecap="round" />
+                    </svg>
+                    <span>Denoising Performance Benchmarks</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+                    <div className="eval-tab-group">
+                      <button
+                        className={`eval-tab ${activeMetricTab === 'psnr' ? 'eval-tab--active' : ''}`}
+                        onClick={() => setActiveMetricTab('psnr')}
+                      >
+                        PSNR (dB)
+                      </button>
+                      <button
+                        className={`eval-tab ${activeMetricTab === 'ssim' ? 'eval-tab--active' : ''}`}
+                        onClick={() => setActiveMetricTab('ssim')}
+                      >
+                        SSIM
+                      </button>
+                      <button
+                        className={`eval-tab ${activeMetricTab === 'time_ms' ? 'eval-tab--active' : ''}`}
+                        onClick={() => setActiveMetricTab('time_ms')}
+                      >
+                        Runtime
+                      </button>
                     </div>
-                  )}
-                  {benchmarkData && <BenchTable data={benchmarkData.gaussian} filterNames={benchmarkData.filter_names} />}
-                </div>
-                <div className="panel">
-                  <div className="panel-header">Salt &amp; Pepper Noise</div>
-                  {benchmarkLoading && (
-                    <div className="eval-dash-empty" style={{ minHeight: 100 }}>
-                      <div className="analysis-scanner-box" style={{ width: 56, height: 7 }}><div className="analysis-scanner-line" /></div>
-                      <p>Computing…</p>
+
+                    <div className="eval-direction-badge">
+                      {activeMetricTab === 'time_ms' ? (
+                        <>
+                          <svg className="eval-direction-icon eval-direction-icon--blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="17 13 12 18 7 13" />
+                            <line x1="12" y1="6" x2="12" y2="18" />
+                          </svg>
+                          <span>Lower is better</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="eval-direction-icon eval-direction-icon--green" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="17 11 12 6 7 11" />
+                            <line x1="12" y1="18" x2="12" y2="6" />
+                          </svg>
+                          <span>Higher is better</span>
+                        </>
+                      )}
                     </div>
-                  )}
-                  {benchmarkData && <BenchTable data={benchmarkData.salt_pepper} filterNames={benchmarkData.filter_names} />}
+                  </div>
                 </div>
+
+                {/* Gaussian Noise Section */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div className="eval-card-header-bar eval-card-header-bar--sub eval-card-header-bar--gaussian">
+                    <div className="eval-card-title-wrap">
+                      <GaussianWavesIcon />
+                      <span>Gaussian Noise</span>
+                    </div>
+                  </div>
+
+                  {benchmarkLoading && !benchmarkData ? (
+                    <div className="eval-dash-empty" style={{ minHeight: 140 }}>
+                      <div className="analysis-scanner-box" style={{ width: 80, height: 8 }}>
+                        <div className="analysis-scanner-line" />
+                      </div>
+                      <p style={{ marginTop: '10px', fontSize: '13px' }}>Running Benchmarks...</p>
+                    </div>
+                  ) : (
+                    benchmarkData && (
+                      <div className="eval-side-by-side" style={{ marginTop: '6px' }}>
+                        <div className="eval-chart-container">
+                          <BenchChart data={benchmarkData.gaussian} filterNames={benchmarkData.filter_names} metric={activeMetricTab} />
+                        </div>
+                        <div className="eval-table-container">
+                          <BenchTable data={benchmarkData.gaussian} filterNames={benchmarkData.filter_names} metric={activeMetricTab} />
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+
+                {/* Divider */}
+                <div className="eval-section-divider" />
+
+                {/* Salt & Pepper Noise Section */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div className="eval-card-header-bar eval-card-header-bar--sub eval-card-header-bar--sp">
+                    <div className="eval-card-title-wrap">
+                      <SpecklesIcon />
+                      <span>Salt &amp; Pepper Noise</span>
+                    </div>
+                  </div>
+
+                  {benchmarkLoading && !benchmarkData ? (
+                    <div className="eval-dash-empty" style={{ minHeight: 140 }}>
+                      <div className="analysis-scanner-box" style={{ width: 80, height: 8 }}>
+                        <div className="analysis-scanner-line" />
+                      </div>
+                      <p style={{ marginTop: '10px', fontSize: '13px' }}>Running Benchmarks...</p>
+                    </div>
+                  ) : (
+                    benchmarkData && (
+                      <div className="eval-side-by-side" style={{ marginTop: '6px' }}>
+                        <div className="eval-chart-container">
+                          <BenchChart data={benchmarkData.salt_pepper} filterNames={benchmarkData.filter_names} metric={activeMetricTab} />
+                        </div>
+                        <div className="eval-table-container">
+                          <BenchTable data={benchmarkData.salt_pepper} filterNames={benchmarkData.filter_names} metric={activeMetricTab} />
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+
               </div>
             )}
 
