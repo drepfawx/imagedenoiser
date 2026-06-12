@@ -78,17 +78,24 @@ class DenoisingDataset(Dataset):
 # training loop
 def train():
     global _log_file
-    _log_file = open("training_log.txt", "w", encoding="utf-8")
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    
+    log_path = os.path.join(parent_dir, "training_log.txt")
+    _log_file = open(log_path, "w", encoding="utf-8")
     log(f"training started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"training with: {device}")
     
     model = SimpleCNNDenoiser().to(device)
-    dataset = DenoisingDataset("dataset")
+    
+    dataset_dir = os.path.join(parent_dir, "dataset")
+    dataset = DenoisingDataset(dataset_dir)
     
     if len(dataset) == 0:
-        log("no images found in the 'dataset' folder")
+        log(f"no images found in the '{dataset_dir}' folder")
         _log_file.close()
         return
         
@@ -127,8 +134,9 @@ def train():
         avg_loss = running_loss / len(dataloader)    
         log(f"epoch [{epoch+1}/{epochs}] | loss: {avg_loss:.5f}\n")
         
-    torch.save(model.state_dict(), "my_model.pth")
-    log(f"training complete at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. saved model as 'my_model.pth'.")
+    model_save_path = os.path.join(parent_dir, "core", "my_model.pth")
+    torch.save(model.state_dict(), model_save_path)
+    log(f"training complete at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. saved model as '{model_save_path}'.")
     _log_file.close()
 
 if __name__ == "__main__":

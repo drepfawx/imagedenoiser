@@ -187,4 +187,3 @@ def niqe(img):
     diff = model_mu.ravel() - features_mu
     niqe_quality = math.sqrt(diff.dot(pseudoinv_of_avg_cov.dot(diff)))
     return round(float(niqe_quality), 4)
-

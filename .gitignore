@@ -5,7 +5,7 @@ frontend-ui/dist-ssr/
 frontend-ui/*.local
 
 # Python backend cache and runtime files
-backend/__pycache__/
+__pycache__/
 backend/saved_results/
 backend/*.pyc
 backend/*.pyo
@@ -24,6 +24,7 @@ Thumbs.db
 
 # Large local datasets and raw image assets in backend
 backend/dataset/
+!backend/dataset/instances_val2017.json
 backend/dataset - Copy/
 backend/alt_database/
 backend/*.jpg
