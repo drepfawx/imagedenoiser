@@ -3,7 +3,8 @@ import shutil
 import kagglehub
 import fiftyone.zoo as foz
 
-BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataset")
+# Resolve BASE_DIR relative to the script's parent directory (backend/)
+BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")
 os.makedirs(BASE_DIR, exist_ok=True)
 
 # download COCO samples
