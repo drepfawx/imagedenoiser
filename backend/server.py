@@ -6,6 +6,7 @@ import os
 import time
 import glob as _glob
 import random as _random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -67,17 +68,41 @@ def build_residual_mask(noisy, cleaned):
 
 DATASET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataset")
 
+import threading
+import subprocess
+import sys
+
+_scrape_lock = threading.Lock()
+_last_scrape_time = 0.0
+
+def run_scraper_if_needed():
+    global _last_scrape_time
+    with _scrape_lock:
+        now = time.time()
+        # If it was run in the last 5 seconds, skip running it again to avoid race conditions
+        if now - _last_scrape_time < 5.0:
+            return
+        
+        # Run the scraper script
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "dataset_scraper.py")
+        subprocess.run([sys.executable, script_path], check=True)
+        _last_scrape_time = time.time()
+
 def _load_dataset_images(n, max_dim):
+    try:
+        run_scraper_if_needed()
+    except Exception as ex:
+        print(f"Scraper execution failed: {ex}")
+
     files = []
     for pat in ["*.png", "*.jpg", "*.JPG", "*.jpeg", "*.PNG", "*.JPEG"]:
         files.extend(_glob.glob(os.path.join(DATASET_DIR, pat)))
     if not files:
         return []
     files.sort()
-    rng = _random.Random(42)
-    selected_files = rng.sample(files, min(n, len(files)))
+    
     imgs = []
-    for path in selected_files:
+    for path in files[:n]:
         img = cv2.imread(path)
         if img is None:
             continue
@@ -280,18 +305,31 @@ def run_benchmark(n: int = Query(default=10, description="Number of dataset imag
 
         def eval_level(noisy_images):
             acc = {fid: {"psnr": [], "ssim": [], "mse": [], "time": []} for fid in filter_ids}
-            for orig, noisy in zip(images, noisy_images):
-                for fid in filter_ids:
+
+            def _eval_one(orig, noisy, fid):
+                t0 = time.perf_counter()
+                cleaned = FILTER_REGISTRY[fid]["fn"](noisy)
+                rt = (time.perf_counter() - t0) * 1000
+                return fid, compute_psnr(orig, cleaned), compute_ssim(orig, cleaned), compute_mse(orig, cleaned), rt
+
+            tasks = [
+                (orig, noisy, fid)
+                for orig, noisy in zip(images, noisy_images)
+                for fid in filter_ids
+            ]
+            with ThreadPoolExecutor(max_workers=min(len(tasks), len(filter_ids) * 2)) as pool:
+                futures = {pool.submit(_eval_one, *t): t for t in tasks}
+                for future in as_completed(futures):
                     try:
-                        t0 = time.perf_counter()
-                        cleaned = FILTER_REGISTRY[fid]["fn"](noisy)
-                        rt = (time.perf_counter() - t0) * 1000
-                        acc[fid]["psnr"].append(compute_psnr(orig, cleaned))
-                        acc[fid]["ssim"].append(compute_ssim(orig, cleaned))
-                        acc[fid]["mse"].append(compute_mse(orig, cleaned))
+                        fid, psnr, ssim, mse, rt = future.result()
+                        acc[fid]["psnr"].append(psnr)
+                        acc[fid]["ssim"].append(ssim)
+                        acc[fid]["mse"].append(mse)
                         acc[fid]["time"].append(rt)
                     except Exception as ex:
+                        _, _, fid = futures[future]
                         print(f"benchmark error [{fid}]: {ex}")
+
             return {
                 fid: {
                     "psnr":    round(float(np.mean(v["psnr"])),    2) if v["psnr"]  else None,
@@ -345,28 +383,15 @@ def run_benchmark(n: int = Query(default=10, description="Number of dataset imag
 @app.get("/api/confusion-matrix")
 def run_confusion_matrix(n: int = Query(default=10, description="Number of source images")):
     try:
-        files = []
-        for pat in ["*.png", "*.jpg", "*.JPG", "*.jpeg", "*.PNG", "*.JPEG"]:
-            files.extend(_glob.glob(os.path.join(DATASET_DIR, pat)))
-        if not files:
+        selected_images = _load_dataset_images(n, max_dim=512)
+        if not selected_images:
             return JSONResponse(status_code=404, content={"error": "No dataset images found in dataset/"})
 
-        files.sort()
-        rng = _random.Random(42)
-        selected = rng.sample(files, min(n, len(files)))
         classes = ["gaussian", "salt_and_pepper", "none"]
         matrix = {actual: {pred: 0 for pred in classes} for actual in classes}
         total  = {cls: 0 for cls in classes}
 
-        for path in selected:
-            orig = cv2.imread(path)
-            if orig is None:
-                continue
-            h, w = orig.shape[:2]
-            if max(h, w) > 512:
-                s = 512 / max(h, w)
-                orig = cv2.resize(orig, (int(w * s), int(h * s)))
-
+        def _eval_image(orig):
             test_cases = [
                 ("none",            orig),
                 ("gaussian",        add_gaussian_noise(orig, 25)),
@@ -374,14 +399,18 @@ def run_confusion_matrix(n: int = Query(default=10, description="Number of sourc
                 ("salt_and_pepper", add_salt_pepper_noise(orig, 0.05)),
                 ("salt_and_pepper", add_salt_pepper_noise(orig, 0.10)),
             ]
-            for actual, noisy in test_cases:
-                predicted = detect_noise_type(noisy)
-                matrix[actual][predicted] += 1
-                total[actual] += 1
+            return [(actual, detect_noise_type(noisy)) for actual, noisy in test_cases]
+
+        with ThreadPoolExecutor(max_workers=len(selected_images)) as pool:
+            futures = [pool.submit(_eval_image, orig) for orig in selected_images]
+            for future in as_completed(futures):
+                for actual, predicted in future.result():
+                    matrix[actual][predicted] += 1
+                    total[actual] += 1
 
         return {
             "status": "success",
-            "n_images": len(selected),
+            "n_images": len(selected_images),
             "matrix": matrix,
             "total_per_class": total,
             "classes": classes,

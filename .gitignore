@@ -24,6 +24,7 @@ Thumbs.db
 
 # Large local datasets and raw image assets in backend
 backend/dataset/
+!backend/dataset/instances_val2017.json
 backend/dataset - Copy/
 backend/alt_database/
 backend/*.jpg

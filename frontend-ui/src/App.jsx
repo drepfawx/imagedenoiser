@@ -1363,7 +1363,7 @@ function App() {
                       : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
                     }
                   </button>
-                  <p className="eval-dash-run-note" style={{ marginTop: '0', textAlign: 'center' }}>∼2–3 min · 10 images · 8 noise levels</p>
+                  <p className="eval-dash-run-note" style={{ marginTop: '0', textAlign: 'center' }}>∼30–60 sec · 10 images · 8 noise levels</p>
                 </div>
 
                 {benchmarkData && (() => {
