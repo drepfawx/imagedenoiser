@@ -94,7 +94,14 @@ const SHORT_NAME = (full = '') =>
   full.replace(' Filter', '').replace(' Denoiser', '')
     .replace('Non-Local Means (NLM)', 'NLM').replace('PyTorch CNN', 'CNN');
 
-const fmtMs = ms => ms == null ? '—' : ms < 1 ? ms.toFixed(3) : ms < 10 ? ms.toFixed(1) : String(Math.round(ms));
+const formatRuntime = (ms) => {
+  if (ms == null) return '—';
+  if (ms >= 1000) {
+    const sec = ms / 1000;
+    return sec < 10 ? `${sec.toFixed(2)} s` : `${sec.toFixed(1)} s`;
+  }
+  return ms < 1 ? `${ms.toFixed(3)} ms` : `${ms.toFixed(1)} ms`;
+};
 
 const getBestFilter = (levels, metric) => {
   if (!levels?.length) return null;
@@ -185,6 +192,8 @@ const getAvgAll = (levels, metric) => {
 };
 
 function BenchChart({ data, filterNames, metric }) {
+  const [hoveredDot, setHoveredDot] = useState(null);
+
   if (!data?.length) return null;
   const allFids = Object.keys(data[0]?.results || {});
   if (!allFids.length) return null;
@@ -195,11 +204,11 @@ function BenchChart({ data, filterNames, metric }) {
   ];
 
   const width = 480;
-  const height = 350;
+  const height = 370;
   const paddingLeft = 25;
   const paddingRight = 15;
   const paddingTop = 30;
-  const paddingBottom = 15;
+  const paddingBottom = 35;
 
   const chartWidth = width - paddingLeft - paddingRight;
   const chartHeight = height - paddingTop - paddingBottom;
@@ -251,9 +260,23 @@ function BenchChart({ data, filterNames, metric }) {
     return paddingTop + chartHeight - ratio * chartHeight;
   };
 
+  const formatValue = (val) => {
+    if (val == null) return '—';
+    if (metric === 'psnr') {
+      return `${val.toFixed(1)} dB`;
+    }
+    if (metric === 'ssim') {
+      return val.toFixed(3);
+    }
+    if (metric === 'time_ms') {
+      return formatRuntime(val);
+    }
+    return val;
+  };
+
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <svg viewBox={`0 0 ${width} ${height}`} className="bench-chart-svg" preserveAspectRatio="xMidYMid meet">
           {yTicks.map((tick, i) => {
             const y = getY(tick);
@@ -329,9 +352,40 @@ function BenchChart({ data, filterNames, metric }) {
                     r={3}
                     className="bench-chart-dot"
                     style={{ stroke: FILTER_COLORS[fid], fill: FILTER_COLORS[fid] }}
-                  >
-                    <title>{`${SHORT_NAME(filterNames?.[fid])}: ${val.toFixed(metric === 'ssim' ? 3 : 1)}${metric === 'time_ms' ? 'ms' : metric === 'psnr' ? ' dB' : ''}`}</title>
-                  </circle>
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const containerRect = e.currentTarget.ownerSVGElement.parentNode.getBoundingClientRect();
+                      
+                      // Find all filters overlapping visually at this specific noise level (within 8px vertical height)
+                      const overlapping = [];
+                      const yVal = getY(val);
+                      fids.forEach(otherFid => {
+                        const otherVal = lvl.results[otherFid]?.[metric];
+                        if (otherVal != null) {
+                          const yOther = getY(otherVal);
+                          if (Math.abs(yOther - yVal) <= 3) {
+                            overlapping.push({
+                              filterName: SHORT_NAME(filterNames?.[otherFid]),
+                              color: FILTER_COLORS[otherFid],
+                              val: otherVal,
+                              y: yOther
+                            });
+                          }
+                        }
+                      });
+
+                      // Sort filters visually from top to bottom (highest value to lowest value)
+                      overlapping.sort((a, b) => a.y - b.y);
+
+                      setHoveredDot({
+                        x: rect.left - containerRect.left + rect.width / 2,
+                        y: rect.top - containerRect.top,
+                        levelLabel: lvl.label,
+                        filters: overlapping
+                      });
+                    }}
+                    onMouseLeave={() => setHoveredDot(null)}
+                  />
                 </g>
               );
             })
@@ -352,6 +406,44 @@ function BenchChart({ data, filterNames, metric }) {
             className="bench-chart-axis-line"
           />
         </svg>
+
+        {hoveredDot && (
+          <span
+            className="tooltip-content chart-tooltip-content"
+            style={{
+              visibility: 'visible',
+              opacity: 1,
+              position: 'absolute',
+              left: `${hoveredDot.x}px`,
+              top: `${hoveredDot.y - 8}px`,
+              transform: 'translate(-50%, -100%)',
+              pointerEvents: 'none',
+              textAlign: 'left',
+              zIndex: 1000,
+              background: 'var(--bg-panel)',
+              border: '1px solid var(--border-color)',
+              boxShadow: '0 10px 28px -8px rgba(0, 0, 0, 0.5)',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              fontSize: '11px',
+              color: 'var(--text-main)',
+              width: 'max-content',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px'
+            }}
+          >
+            <span style={{ fontWeight: 700, color: 'var(--text-header)', display: 'block', borderBottom: '1px solid var(--border-color)', paddingBottom: '3px', marginBottom: '2px' }}>
+              {hoveredDot.levelLabel}
+            </span>
+            {hoveredDot.filters.map((f, fi) => (
+              <span key={fi} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: f.color, display: 'inline-block', flexShrink: 0 }} />
+                <strong>{f.filterName}</strong>: {formatValue(f.val)}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -416,7 +508,7 @@ function BenchTable({ data, filterNames, metric }) {
       return val.toFixed(3);
     }
     if (metric === 'time_ms') {
-      return `${fmtMs(val)}ms`;
+      return formatRuntime(val);
     }
     return val;
   };
@@ -1227,9 +1319,20 @@ function App() {
                     <button
                       onClick={handleProcessImage}
                       disabled={loading || isCurrentFileAlreadyAnalyzed}
-                      className="action-btn"
+                      className="action-btn eval-dash-run-btn"
                     >
-                      {loading ? 'Processing...' : isCurrentFileAlreadyAnalyzed ? 'Already analyzed' : 'Start Analysis'}
+                      {loading ? (
+                        <><div className="eval-btn-spinner" />Processing…</>
+                      ) : isCurrentFileAlreadyAnalyzed ? (
+                        'Already analyzed'
+                      ) : (
+                        <>
+                          <svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 13, height: 13, flexShrink: 0 }}>
+                            <path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" />
+                          </svg>
+                          Start Analysis
+                        </>
+                      )}
                     </button>
                   )}
 
@@ -1755,7 +1858,7 @@ function App() {
                                     {filter.name}
                                   </td>
                                   <td className={`metric-value-mono${filter.id === fastestId ? ' cell-best' : ''}`}>
-                                    {filter.runtime_ms !== null && filter.runtime_ms !== undefined ? `${filter.runtime_ms} ms` : '—'}
+                                    {formatRuntime(filter.runtime_ms)}
                                   </td>
                                   <td className={`metric-value-mono${filter.id === bestEdgeId ? ' cell-best' : ''}`}>
                                     {filter.edge_preservation !== null && filter.edge_preservation !== undefined ? filter.edge_preservation.toFixed(4) : '—'}
@@ -1806,7 +1909,7 @@ function App() {
 
             <div className="eval-left-col">
               {/* narrow control panel */}
-              <div className="panel eval-control-panel" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="panel eval-control-panel">
                 <div className="panel-header">
                   <span>Experimental Evaluation</span>
                   {benchmarkData && (
@@ -1815,14 +1918,14 @@ function App() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                  <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
                     Benchmarks all five filters on {benchmarkData?.n_images ?? 10} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
                   </p>
                   {evalError && <div className="upload-error-msg">{evalError}</div>}
                   <button className="action-btn eval-dash-run-btn" onClick={handleRunEvaluation} disabled={benchmarkLoading} style={{ width: '100%' }}>
                     {benchmarkLoading
                       ? <><div className="eval-btn-spinner" />Running…</>
-                      : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 11, height: 11, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
+                      : <><svg viewBox="0 0 16 16" fill="currentColor" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M5.5 3.5L13 8l-7.5 4.5V3.5z" /></svg>Run Evaluation</>
                     }
                   </button>
                   <p className="eval-dash-run-note" style={{ marginTop: '0', textAlign: 'center' }}>∼2–3 min · 10 images · 8 noise levels</p>
@@ -1833,7 +1936,7 @@ function App() {
                   const sBest = getBestFilterByUtility(benchmarkData.salt_pepper);
 
                   return (
-                    <div className="eval-top-performers" style={{ paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+                    <div className="eval-top-performers" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
                       <div className="eval-performer-row">
                         <div className="eval-performer-info">
                           <div className="eval-performer-icon-wrap" style={{ color: 'var(--accent-blue)' }}>
@@ -1855,12 +1958,12 @@ function App() {
                               cursor: 'help'
                             }}
                           >
-                            Top Performer
+                            Best
                             <span className="tooltip-content" style={{ textAlign: 'left', minWidth: '150px' }}>
                               <span style={{ fontWeight: 700, color: 'var(--text-header)', display: 'block', marginBottom: '6px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Average Performance</span>
                               PSNR: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.gaussian, gBest, 'psnr')?.toFixed(1)} dB</strong><br />
                               SSIM: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.gaussian, gBest, 'ssim')?.toFixed(3)}</strong><br />
-                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{fmtMs(getBestAvgValue(benchmarkData.gaussian, gBest, 'time_ms'))}ms</strong>
+                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{formatRuntime(getBestAvgValue(benchmarkData.gaussian, gBest, 'time_ms'))}</strong>
                             </span>
                           </span>
                         )}
@@ -1887,12 +1990,12 @@ function App() {
                               cursor: 'help'
                             }}
                           >
-                            Top Performer
+                            Best
                             <span className="tooltip-content" style={{ textAlign: 'left', minWidth: '150px' }}>
                               <span style={{ fontWeight: 700, color: 'var(--text-header)', display: 'block', marginBottom: '6px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Average Performance</span>
                               PSNR: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.salt_pepper, sBest, 'psnr')?.toFixed(1)} dB</strong><br />
                               SSIM: <strong style={{ color: 'var(--text-header)' }}>{getBestAvgValue(benchmarkData.salt_pepper, sBest, 'ssim')?.toFixed(3)}</strong><br />
-                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{fmtMs(getBestAvgValue(benchmarkData.salt_pepper, sBest, 'time_ms'))}ms</strong>
+                              Runtime: <strong style={{ color: 'var(--text-header)' }}>{formatRuntime(getBestAvgValue(benchmarkData.salt_pepper, sBest, 'time_ms'))}</strong>
                             </span>
                           </span>
                         )}
@@ -1903,7 +2006,7 @@ function App() {
 
                 {/* confusion matrix — compact, nested card inside panel */}
                 {confusionData && (
-                  <div className="analysis-profile-card" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div className="analysis-profile-card" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '12px' }}>
                     <div className="analysis-profile-header">
                       <div className="analysis-icon-wrap">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-muted)' }}>
@@ -1913,8 +2016,8 @@ function App() {
                         </svg>
                       </div>
                       <div>
-                        <h4 style={{ margin: 0, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)' }}>Precision Map</h4>
-                        <strong style={{ fontSize: '13px', color: 'var(--text-header)' }}>Noise Detector Accuracy</strong>
+                        <h4 style={{ margin: 0, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)' }}>Precision Map</h4>
+                        <strong style={{ fontSize: '16px', color: 'var(--text-header)' }}>Noise Detector Accuracy</strong>
                       </div>
                     </div>
 
@@ -1954,7 +2057,7 @@ function App() {
                         </tbody>
                       </table>
                     </div>
-                    <p className="bench-note" style={{ marginTop: '6px', fontSize: '11px', opacity: 0.75, margin: 0 }}>
+                    <p className="bench-note" style={{ marginTop: '6px', fontSize: '12px', opacity: 0.75, margin: 0 }}>
                       Rows = actual noise, columns = predictions. Highlighted diagonal cells show correct detections.
                     </p>
                   </div>
