@@ -2169,7 +2169,7 @@ body.theme-light .results-table tr.row-selected {
 .row-apply-badge {
   font-size: 9px;
   font-weight: 600;
-  padding: 3px 8px;
+  padding: 3px 0;
   border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -2177,6 +2177,8 @@ body.theme-light .results-table tr.row-selected {
   display: inline-block;
   text-align: center;
   line-height: 1.2;
+  width: 52px;
+  box-sizing: border-box;
 }
 
 /* specific colors and weights */
