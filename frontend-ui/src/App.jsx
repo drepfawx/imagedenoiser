@@ -471,7 +471,7 @@ function App() {
         backgroundFetchSessionRef.current = sessionToken;
 
         const uncomputedFilters = (data?.filter_metrics || [])
-          .filter((f) => f.id !== data?.analysis?.best_filter_id && f.id !== null)
+          .filter((f) => !data?.images?.all_cleaned?.[f.id])
           .map((f) => f.id);
 
         if (uncomputedFilters.length > 0) {

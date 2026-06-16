@@ -106,9 +106,8 @@ def run_filter_with_metrics(input_img, filter_fn):
         niqe_score = 0.0
 
     Q = max(0.0, min(1.0, (100.0 - brisque_score) / 100.0))
-    S = 1.0 / (1.0 + runtime_ms / 250.0)
     E = edge_preservation
-    utility_score = round(float(0.4 * E + 0.3 * Q + 0.3 * S), 4)
+    utility_score = round(float(0.5 * E + 0.5 * Q), 4)
 
     return cleaned, {
         "runtime_ms": round(runtime_ms, 1),
@@ -124,6 +123,6 @@ FILTER_REGISTRY = {
     "gaussian":  {"name": "Gaussian Filter",       "fn": lambda img: cv2.GaussianBlur(img, (5, 5), 0)},
     "median":    {"name": "Median Filter",          "fn": lambda img: cv2.medianBlur(img, 5)},
     "bilateral": {"name": "Bilateral Filter",       "fn": lambda img: cv2.bilateralFilter(img, 9, 75, 75)},
-    "nlm":       {"name": "Non-Local Means (NLM)",  "fn": lambda img: apply_tiled_filter(img, lambda tile: cv2.fastNlMeansDenoisingColored(tile, None, 10, 10, 7, 21), overlap=32)},
+    "nlm":       {"name": "Non-Local Means (NLM)",  "fn": lambda img: apply_tiled_filter(img, lambda tile: cv2.fastNlMeansDenoisingColored(tile, None, 10, 10, 7, 11), overlap=32)},
     "cnn":       {"name": "PyTorch CNN Denoiser",    "fn": run_cnn_filter},
 }
