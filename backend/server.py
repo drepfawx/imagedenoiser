@@ -161,48 +161,54 @@ def process_image(file: UploadFile = File(...)):
         else:
             system_decision = "none"
 
-        # run ALL filters in parallel
+        # run filters only if noise is detected
         detected_noise = system_decision.upper() != "NONE"
         filter_results = {}
+        best_filter_id = None
 
-        def _run_filter(fid):
-            finfo = FILTER_REGISTRY[fid]
-            cleaned, metrics = run_filter_with_metrics(input_img, finfo["fn"])
-            return fid, cleaned, metrics
+        if detected_noise:
+            def _run_filter(fid):
+                finfo = FILTER_REGISTRY[fid]
+                cleaned, metrics = run_filter_with_metrics(input_img, finfo["fn"])
+                return fid, cleaned, metrics
 
-        with ThreadPoolExecutor(max_workers=len(FILTER_REGISTRY)) as pool:
-            futures = {pool.submit(_run_filter, fid): fid for fid in FILTER_REGISTRY}
-            for future in as_completed(futures):
-                fid, cleaned, metrics = future.result()
-                filter_results[fid] = (cleaned, metrics)
+            with ThreadPoolExecutor(max_workers=len(FILTER_REGISTRY)) as pool:
+                futures = {pool.submit(_run_filter, fid): fid for fid in FILTER_REGISTRY}
+                for future in as_completed(futures):
+                    fid, cleaned, metrics = future.result()
+                    filter_results[fid] = (cleaned, metrics)
 
-        # pick best filter based on noise type
-        if system_decision == "salt_and_pepper":
-            best_filter_id = "median"
-        elif system_decision == "gaussian":
-            best_filter_id = max(
-                filter_results.keys(),
-                key=lambda fid: filter_results[fid][1].get("utility_score") or 0
-            )
-        else:
-            best_filter_id = None
+            if system_decision == "salt_and_pepper":
+                best_filter_id = "median"
+            else:
+                best_filter_id = max(
+                    filter_results.keys(),
+                    key=lambda fid: filter_results[fid][1].get("utility_score") or 0
+                )
 
         algorithm_used = FILTER_REGISTRY[best_filter_id]["name"] if best_filter_id else "no significant noise detected"
         cleaned_img = filter_results[best_filter_id][0] if best_filter_id else input_img.copy()
 
-        # build response structures for all filters
+        # build response structures
         filter_metrics = []
         all_cleaned = {}
         all_histograms = {}
         all_masks = {}
 
         for fid, finfo in FILTER_REGISTRY.items():
-            cleaned_f, metrics_f = filter_results[fid]
-            filter_metrics.append({"id": fid, "name": finfo["name"], **metrics_f})
-            all_cleaned[fid] = mat_to_base64(cleaned_f)
-            all_histograms[fid] = compute_luminance_histogram(cleaned_f)
-            if detected_noise:
+            if fid in filter_results:
+                cleaned_f, metrics_f = filter_results[fid]
+                filter_metrics.append({"id": fid, "name": finfo["name"], **metrics_f})
+                all_cleaned[fid] = mat_to_base64(cleaned_f)
+                all_histograms[fid] = compute_luminance_histogram(cleaned_f)
                 all_masks[fid] = build_residual_mask(input_img, cleaned_f)
+            else:
+                filter_metrics.append({
+                    "id": fid, "name": finfo["name"],
+                    "runtime_ms": None, "edge_preservation": None,
+                    "laplacian_var": None, "brisque": None,
+                    "niqe": None, "utility_score": None
+                })
 
         noisy_hist = compute_luminance_histogram(input_img)
         cleaned_hist = compute_luminance_histogram(cleaned_img)
