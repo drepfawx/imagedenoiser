@@ -278,7 +278,7 @@ def apply_filter(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/benchmark")
-def run_benchmark(n: int = Query(default=10, description="Number of dataset images to evaluate")):
+def run_benchmark(n: int = Query(default=100, description="Number of dataset images to evaluate")):
     try:
         images = _load_dataset_images(n, max_dim=256)
         if not images:
@@ -377,7 +377,7 @@ def run_benchmark(n: int = Query(default=10, description="Number of dataset imag
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/confusion-matrix")
-def run_confusion_matrix(n: int = Query(default=10, description="Number of source images")):
+def run_confusion_matrix(n: int = Query(default=100, description="Number of source images")):
     try:
         selected_images = _load_dataset_images(n, max_dim=512)
         if not selected_images:
@@ -397,7 +397,7 @@ def run_confusion_matrix(n: int = Query(default=10, description="Number of sourc
             ]
             return [(actual, detect_noise_type(noisy)) for actual, noisy in test_cases]
 
-        with ThreadPoolExecutor(max_workers=len(selected_images)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(selected_images), 20)) as pool:
             futures = [pool.submit(_eval_image, orig) for orig in selected_images]
             for future in as_completed(futures):
                 for actual, predicted in future.result():

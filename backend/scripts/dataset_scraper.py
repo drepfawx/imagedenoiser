@@ -34,7 +34,7 @@ try:
         images = metadata.get("images", [])
         if len(images) > 0:
             # select 10 random images from the 5000 validation images
-            selected_images = random.sample(images, min(10, len(images)))
+            selected_images = random.sample(images, min(100, len(images)))
 
             def _download(img):
                 filename = img["file_name"]
@@ -49,7 +49,7 @@ try:
 
             print(f"Downloading {len(selected_images)} random images to: {BASE_DIR}")
             copied_count = 0
-            with ThreadPoolExecutor(max_workers=len(selected_images)) as pool:
+            with ThreadPoolExecutor(max_workers=min(len(selected_images), 20)) as pool:
                 futures = {pool.submit(_download, img): img for img in selected_images}
                 for future in as_completed(futures):
                     try:
