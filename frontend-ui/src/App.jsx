@@ -1354,7 +1354,7 @@ function App() {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
-                    Benchmarks all five filters on {benchmarkData?.n_images ?? 10} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
+                    Benchmarks all five filters on {benchmarkData?.n_images ?? 100} test images synthetically noised at 4 Gaussian and 4 Salt &amp; Pepper levels. PSNR and SSIM are measured against the original clean image.
                   </p>
                   {evalError && <div className="upload-error-msg">{evalError}</div>}
                   <button className="action-btn eval-dash-run-btn" onClick={handleRunEvaluation} disabled={benchmarkLoading} style={{ width: '100%' }}>
